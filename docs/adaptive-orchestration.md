@@ -388,6 +388,10 @@ may perform only these bounded, semantics-preserving normalizations:
   response kind; partial, mixed, and ambiguous objects remain invalid;
 - Infer `kind` when an existing envelope has exactly one non-null `question` or
   `proposal` body and therefore makes the discriminator unambiguous;
+- Bound only a suggested question option's advisory `description` to 300
+  characters, marking omitted prose with an ellipsis. The raw typed response
+  and the normalization are retained; option IDs, labels, and exact
+  `product_definition_values` are unchanged;
 - Remove a criterion definition whose exact ID belongs to the active
   controller-owned execution profile, while retaining any task binding to that
   known ID and using only the profile's canonical definition. If the colliding
@@ -614,8 +618,10 @@ requires one complete regeneration, SAT derives a type-only transport schema
 from that same semantic schema. It rejects scalar placeholders in proposal
 records while leaving required fields, IDs, authorization, and policy to the
 Controller; the private envelope still binds the exact semantic-schema digest.
-The prompt exposes each correction slot's exact value
-schema, and the Controller enforces it after capture. If that schema permits only
+The prompt exposes each correction slot's exact value schema and every
+validation error at or below that slot with its exact nested path, even when the
+authorized replacement is a parent record. The Controller enforces the schema
+after capture. If that schema permits only
 an object or array and the captured replacement contains exactly one strict JSON
 encoding of the matching container, the Controller removes that extra encoding
 layer before validation. Duplicate keys, non-standard constants, an oversized

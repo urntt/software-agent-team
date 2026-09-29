@@ -1988,6 +1988,24 @@ def _normalize_planning_response_payload(
 
     question = normalized.get("question")
     if isinstance(question, dict):
+        options = question.get("options")
+        if isinstance(options, list):
+            for index, option in enumerate(options):
+                if not isinstance(option, dict):
+                    continue
+                description = option.get("description")
+                if not isinstance(description, str):
+                    continue
+                cleaned = description.strip()
+                if len(cleaned) <= 300:
+                    continue
+                clipped = cleaned[:299].rstrip()
+                if not clipped:
+                    continue
+                option["description"] = clipped + "…"
+                changes.append(
+                    f"shortened question.options[{index}].description to 300 characters"
+                )
         try:
             question_category = PlanningDecisionCategory(
                 question.get("decision_category")

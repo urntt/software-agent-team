@@ -490,6 +490,12 @@ def _paths_overlap(left: str, right: str) -> bool:
     return left_parts[:limit] == right_parts[:limit]
 
 
+def _path_contains(parent: str, child: str) -> bool:
+    parent_parts = _decode_pointer(parent)
+    child_parts = _decode_pointer(child)
+    return child_parts[: len(parent_parts)] == parent_parts
+
+
 def _minimal_correction_paths(
     issues: tuple[ResponseValidationIssue, ...],
 ) -> tuple[str, ...]:
@@ -1055,6 +1061,7 @@ def correction_prompt(
             "target_path": path,
             "errors": [
                 {
+                    "path": issue.path,
                     "code": issue.code,
                     "invariant_id": issue.invariant_id,
                     "subjects": [
@@ -1063,7 +1070,7 @@ def correction_prompt(
                     "message": issue.message,
                 }
                 for issue in plan.diagnostic.issues
-                if issue.path == path
+                if _path_contains(path, issue.path)
             ],
         }
         if include_current_values:
@@ -1145,7 +1152,10 @@ def correction_prompt(
         "cross-slot relationships. "
         "When a slot includes "
         "value_schema, that schema is the exact type and shape contract for its "
-        "replacement value; satisfy its listed error constraints as well. When a "
+        "replacement value; satisfy its listed error constraints as well. "
+        "Each listed error.path identifies the exact field that failed "
+        "inside the authorized slot; correct that field in the "
+        "replacement value. When a "
         "slot includes candidate_catalog, submit only one listed short candidate "
         "handle for "
         "that slot. The controller, not the model, replaces the handle with the "

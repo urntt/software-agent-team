@@ -604,6 +604,7 @@ def test_correction_prompt_projects_each_target_value_schema() -> None:
             "target_path": "/items/0/id",
             "errors": [
                 {
+                    "path": "/items/0/id",
                     "code": "invalid_id",
                     "invariant_id": "invalid_id",
                     "subjects": [],

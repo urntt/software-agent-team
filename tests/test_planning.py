@@ -1991,6 +1991,50 @@ def test_invalid_product_question_is_replaced_as_one_authority_unit(
     assert "product_definition_dimensions" in value_schema["required"]
 
 
+def test_overlong_question_option_advisory_is_bounded_before_validation(
+    tmp_path: Path,
+) -> None:
+    initial = product_intent_question_response().model_dump(mode="json")
+    extra_option = dict(initial["question"]["options"][1])
+    extra_option["id"] = "third_option"
+    extra_option["label"] = "Third option"
+    initial["question"]["options"].append(extra_option)
+    initial["question"]["options"][0]["description"] = "x" * 333
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=initial)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor,
+        store=store,
+        policy=policy(response_repair_limit=1),
+        clock=AdvancingClock(),
+    )
+    shown: list[PresentedPlanningQuestion] = []
+
+    assert (
+        coordinator.start(
+            request(),
+            answer_question=lambda question: shown.append(question) or None,
+        )
+        is None
+    )
+    assert len(shown) == 1
+    first = store.load_turn(request().run_id, 1)
+    assert first.response_validation is None
+    assert first.submission_payload["question"]["options"][0]["description"] == (
+        "x" * 333
+    )
+    assert first.response_normalizations == (
+        "shortened question.options[0].description to 300 characters",
+    )
+    assert shown[0].options[0].description == "x" * 299 + "…"
+    assert shown[0].options[0].product_definition_values == (
+        product_intent_question_response().question.options[0].product_definition_values
+    )
+    assert len(executor.requests) == 1
+
+
 def test_question_authority_field_typo_requires_whole_question_replacement(
     tmp_path: Path,
 ) -> None:
