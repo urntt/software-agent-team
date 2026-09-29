@@ -445,7 +445,7 @@ def test_materialized_plugins_disable_pinned_runtime_memory_slot(
     dist = runtime / "lib/node_modules/openclaw/dist"
     modules = [
         path
-        for path in dist.glob("config-state-*.js")
+        for path in dist.glob("config-state-*.mjs")
         if "function resolveMemorySlotDecision(" in path.read_text()
     ]
     assert len(modules) == 1, "review plugin-slot compatibility after a runtime update"
@@ -513,7 +513,7 @@ def test_materialized_config_enables_pinned_no_progress_loop_breaker(
     modules = [
         path
         for path in (runtime / "lib/node_modules/openclaw/dist").glob(
-            "tool-loop-detection-*.js"
+            "tool-loop-detection-*.mjs"
         )
         if "function detectToolCallLoop(" in path.read_text()
     ]
