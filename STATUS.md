@@ -9,31 +9,28 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.5.2`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.2),
-tagged at `e26268f0eedfd17101c6c92839fb6eedfc3fae81`. Its exact-tag
-GitHub gate passed doctor, formatting, lint, and 1,984 tests (four environment
-fixtures skipped), and published the release-bound `bootstrap.sh` and
-`sat-release.json` assets. The same clean commit passed a normal-user OVH
-canonical gate with 1,987 tests passing and one root-only fixture skipped.
-Fresh-account checks installed the exact dev candidate and the public current
-stable, verified release identity and isolated runtime paths, then completed
-export, uninstall, and exact cleanup without provider calls. A fresh-account
-DeepSeek task on the published `v0.5.2` reached first Planning but failed when
-the provider rejected a named submission-tool choice absent from the request's
-direct tool list. It did not reach approval or delivery.
+The latest published stable release is [`v0.5.3`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.3),
+tagged at `be3af3a9a9d6c63968ee3559429dfb40c1298c09`. Its exact-tag
+GitHub gate passed and published release-bound `bootstrap.sh` and
+`sat-release.json` assets; the candidate passed the OVH canonical gate with
+1,990 tests passing and one root-only fixture skipped. A new ordinary account
+installed that public stable, completed first configuration and a subsequent
+startup self-check, then stopped in real DeepSeek Planning. The pinned OpenClaw
+stored a large current-turn event as zstd in its per-Agent SQLite session;
+SAT's `v0.5.3` reader rejected compressed events and terminated the invocation
+before an approvable proposal. Provider billing for that interrupted call is
+unknown. The account and owned resources were cleaned after evidence capture.
 
-The `0.5.3` candidate in this checkout keeps bound submission tools directly visible
-and reads the pinned OpenClaw 2026.9.6 per-Agent SQLite session evidence. A
-local mock-provider invocation through the actual OpenClaw and SAT execution
-adapter accepted a bound Planning submission; its provider request, tool
-result, and session attribution were checked. The same candidate diff passed
-the OVH canonical gate with 1,990 tests passing and one root-only fixture
-skipped. This is offline integration evidence, not a published-release or
-provider-backed ordinary-user success.
+The `0.5.4` candidate in this checkout decodes bounded zstd SQLite events.
+The actual pinned OpenClaw, SAT execution adapter, and a local mock provider
+completed a bound submission with a compressed event; 140 related focused
+tests passed. This is offline integration evidence, not a published-release or
+provider-backed ordinary-user success. A canonical gate and new ordinary-user
+validation remain outstanding.
 
-The previous `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
+The earlier `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
 and 13/13 independent black-box checks. That historical success does not
-establish `v0.5.2` provider-backed behavior or another provider/host mode.
+establish the current candidate's provider-backed behavior.
 
 ## Implemented in the checkout
 

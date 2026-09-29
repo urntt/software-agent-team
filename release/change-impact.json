@@ -1,17 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.5.2",
-  "target_version": "0.5.3",
+  "baseline_version": "0.5.3",
+  "target_version": "0.5.4",
   "changes": [
     {
-      "id": "direct-bound-submission-tools",
+      "id": "bounded-sqlite-zstd-events",
       "impact": "patch",
-      "summary": "Keep the bound submission tool directly declared when OpenClaw calls a provider with an exact named tool choice"
-    },
-    {
-      "id": "sqlite-session-evidence",
-      "impact": "patch",
-      "summary": "Attribute bounded current-turn tool and submission evidence from the pinned OpenClaw per-Agent SQLite session store"
+      "summary": "Decode bounded compressed current-turn SQLite events from the pinned OpenClaw runtime while retaining fail-closed attribution"
     }
   ]
 }
