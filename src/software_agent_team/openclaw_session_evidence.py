@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -473,9 +474,24 @@ def _read_sqlite_bound_transcript(
                     "OpenClaw SQLite transcript exceeds its size limit"
                 )
             try:
-                payload = zstandard.ZstdDecompressor(
+                chunks: list[bytes] = []
+                remaining = _MAX_RECORD_BYTES + 1
+                with zstandard.ZstdDecompressor(
                     max_window_size=_MAX_ZSTD_WINDOW_BYTES
-                ).decompress(event_zstd, max_output_size=_MAX_RECORD_BYTES)
+                ).stream_reader(
+                    io.BytesIO(event_zstd), read_across_frames=True
+                ) as reader:
+                    while remaining:
+                        chunk = reader.read(min(64 * 1024, remaining))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                if remaining == 0:
+                    raise OpenClawSessionEvidenceError(
+                        "OpenClaw SQLite transcript exceeds its size limit"
+                    )
+                payload = b"".join(chunks)
                 payload.decode("utf-8", errors="strict")
             except (zstandard.ZstdError, UnicodeDecodeError) as error:
                 raise OpenClawSessionEvidenceError(
