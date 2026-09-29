@@ -376,6 +376,8 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     assert Path(plugin_paths[0]).name == "artifact_submission"
     assert (Path(plugin_paths[0]) / "openclaw.plugin.json").is_file()
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
+    assert payload["tools"]["toolSearch"] is False
+    assert payload["tools"]["codeMode"] is False
     assert payload["tools"]["loopDetection"] == {"enabled": True}
     reviewer = agents["quality_reviewer"]
     tester = agents["acceptance_tester"]
@@ -421,6 +423,8 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
         "sat-artifact-submission": {"enabled": True}
     }
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
+    assert payload["tools"]["toolSearch"] is False
+    assert payload["tools"]["codeMode"] is False
 
 
 @pytest.mark.parametrize("bootstrap", [True, False])

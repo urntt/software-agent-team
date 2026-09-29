@@ -30,11 +30,20 @@ from software_agent_team.execution import (
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.quality_gates import load_quality_gate_configuration
 from software_agent_team.runtime_configuration import materialize_run_configuration
+from software_agent_team.submissions import (
+    AgentSubmissionContract,
+    AgentSubmissionPurpose,
+)
 from software_agent_team.teams import AgentCapability, load_team_manifest
 
 MODEL = "deepseek/deepseek-flash"
 SCENARIOS = ("stream", "recovery", "disconnect", "hang")
-OPTIONAL_SCENARIOS = ("tool-rejection", "continuation", "correction")
+OPTIONAL_SCENARIOS = (
+    "tool-rejection",
+    "continuation",
+    "correction",
+    "submission-contract",
+)
 _EXPECTED_TERMINAL = {
     "stream": ("completed", "completed"),
     "recovery": ("completed", "completed"),
@@ -43,6 +52,7 @@ _EXPECTED_TERMINAL = {
     "tool-rejection": ("completed", "completed"),
     "continuation": ("completed", "completed"),
     "correction": ("completed", "completed"),
+    "submission-contract": ("completed", "completed"),
 }
 _TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
 _EXPECTED_RESPONSE = '{"status":"ok"}'
@@ -105,7 +115,10 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
     if expected_status == "completed":
         if exit_code != 0:
             mismatches.append(f"exit_code expected 0, got {exit_code!r}")
-        if outcome.get("response_text") != _EXPECTED_RESPONSE:
+        if (
+            scenario != "submission-contract"
+            and outcome.get("response_text") != _EXPECTED_RESPONSE
+        ):
             mismatches.append("completed response_text did not match the fixture")
         if outcome.get("provider") != MODEL.split("/", 1)[0]:
             mismatches.append("completed provider identity did not match the fixture")
@@ -198,6 +211,18 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
             mismatches.append("expected independent successful fixture read evidence")
         if requests_seen != 3:
             mismatches.append("expected rejection, read, and final response requests")
+    elif scenario == "submission-contract":
+        events = _sequence(outcome.get("server_events"))
+        if not any(
+            _mapping(item).get("kind") == "submission_contract"
+            and _mapping(item).get("valid") is True
+            for item in events
+        ):
+            mismatches.append("provider did not see the bound submission tool")
+        if _mapping(outcome.get("semantic_submission")).get("status") != "ok":
+            mismatches.append("bound tool did not submit the semantic payload")
+        if outcome.get("submission_evidence_status") != "accepted":
+            mismatches.append("bound submission evidence was not accepted")
     elif scenario == "continuation":
         invocations = _sequence(outcome.get("invocations"))
         if len(invocations) != 2:
@@ -497,6 +522,22 @@ class ScenarioHandler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
 
+        if server.scenario == "submission-contract" and server.requests_seen == 1:
+            names = [
+                _mapping(item.get("function")).get("name")
+                for item in _sequence(request.get("tools"))
+                if isinstance(item, dict)
+            ]
+            choice = _mapping(_mapping(request.get("tool_choice")).get("function"))
+            valid = (
+                "sat_submit_artifact" in names
+                and choice.get("name") == "sat_submit_artifact"
+            )
+            server.record("submission_contract", valid=valid, tool_names=names)
+            if not valid:
+                self.send_error(400, "bound submission tool was not declared")
+                return
+
         if server.scenario == "disconnect":
             server.record("disconnect")
             self.connection.shutdown(socket.SHUT_RDWR)
@@ -521,6 +562,10 @@ class ScenarioHandler(BaseHTTPRequestHandler):
                 else ("read", {"path": "/agent/fixture.txt"})
             )
             self._send_tool_call(name, arguments)
+            return
+
+        if server.scenario == "submission-contract" and server.requests_seen == 1:
+            self._send_tool_call("sat_submit_artifact", {"artifact": {"status": "ok"}})
             return
 
         if server.scenario == "hang":
@@ -651,8 +696,19 @@ def _serialize_invocation(
     )
     return {
         "status": result.status.value,
+        "error": result.error,
         "stop_reason": (None if lifecycle is None else lifecycle.shutdown.reason.value),
         "response_text": result.response_text,
+        "semantic_submission": (
+            None
+            if result.semantic_submission is None
+            else result.semantic_submission.payload
+        ),
+        "submission_evidence_status": (
+            None
+            if result.submission_evidence is None
+            else result.submission_evidence.status.value
+        ),
         "exit_code": result.telemetry.exit_code,
         "duration_ms": result.telemetry.duration_ms,
         "provider": result.telemetry.provider,
@@ -664,6 +720,7 @@ def _serialize_invocation(
             else result.telemetry.usage.model_dump(mode="json")
         ),
         "tool_evidence_status": result.telemetry.tool_evidence_status.value,
+        "tool_evidence_error": result.telemetry.tool_evidence_error,
         "tool_calls": [
             item.model_dump(mode="json") for item in result.telemetry.tool_calls
         ],
@@ -713,7 +770,7 @@ def execute_scenario(
     scenario_root = root / scenario
     state = scenario_root / "state"
     workspace = scenario_root / "workspace"
-    state.mkdir(parents=True)
+    state.mkdir(mode=0o700, parents=True)
     workspace.mkdir()
     if scenario == "tool-rejection":
         (workspace / "fixture.txt").write_text("LOOPBACK_READ_OK\n", encoding="utf-8")
@@ -757,6 +814,19 @@ def execute_scenario(
             prompt='Reply with exactly: {"status":"ok"}',
             timeout_seconds=0,
             model=MODEL,
+            submission_contract=(
+                AgentSubmissionContract.from_schema(
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"status": {"type": "string"}},
+                        "required": ["status"],
+                    },
+                    purpose=AgentSubmissionPurpose.PLANNING_RESPONSE,
+                )
+                if scenario == "submission-contract"
+                else None
+            ),
         )
         requests = (
             (request, request.model_copy(update={"session_generation": 2}))

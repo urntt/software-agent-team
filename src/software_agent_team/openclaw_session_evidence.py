@@ -7,10 +7,13 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import stat
+from contextlib import closing
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import quote
 
 from pydantic import ValidationError
 
@@ -32,6 +35,7 @@ _MAX_CHAIN_RECORDS = 16384
 _MAX_RECORD_BYTES = 1024 * 1024
 _MAX_TOOL_OUTPUT_BYTES = 1024 * 1024
 _MAX_TOOL_CALLS = 999
+_MAX_SQLITE_BYTES = 2 * 1024 * 1024 * 1024
 _OUTPUT_EXCERPT_CHARACTERS = 4096
 _TRUNCATION_MARKER = "\n... controller excerpt truncated ...\n"
 
@@ -334,6 +338,151 @@ def _require_safe_session_directory(state_dir: Path, agent_id: str) -> Path:
             "OpenClaw session directory is not a direct directory boundary"
         )
     return current
+
+
+def _uses_sqlite_sessions(state_dir: Path, agent_id: str) -> bool:
+    """Select the pinned runtime's store before any legacy JSONL fallback."""
+
+    try:
+        (state_dir / "agents" / agent_id / "agent").lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _require_safe_sqlite_database(state_dir: Path, agent_id: str) -> Path | None:
+    if not state_dir.is_absolute() or not re.fullmatch(r"[a-z][a-z0-9_]*", agent_id):
+        raise OpenClawSessionEvidenceError("OpenClaw SQLite state identity is invalid")
+    current = state_dir
+    for part in ("agents", agent_id, "agent"):
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite session directory is unavailable"
+            ) from error
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite session directory is unsafe"
+            )
+        current /= part
+    metadata = current.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+    ):
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw SQLite session directory is unsafe"
+        )
+    database = current / "openclaw-agent.sqlite"
+    try:
+        metadata = database.lstat()
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_size > _MAX_SQLITE_BYTES
+        or metadata.st_mode & 0o022
+    ):
+        raise OpenClawSessionEvidenceError("OpenClaw SQLite session store is unsafe")
+    return database
+
+
+def _read_sqlite_bound_transcript(
+    state_dir: Path,
+    agent_id: str,
+    session_key: str,
+    *,
+    expected_session_id: str | None = None,
+    allow_initializing: bool = False,
+) -> tuple[str, _BoundOpenClawTranscript | None] | None:
+    """Read one exact current session using the pinned SQLite schema, read-only."""
+
+    database = _require_safe_sqlite_database(state_dir, agent_id)
+    if database is None:
+        return None
+    uri = f"file:{quote(str(database), safe='/')}?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=1.0)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            row = connection.execute(
+                "SELECT current_session_id FROM session_nodes WHERE session_key=?",
+                (session_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            session_id = row[0]
+            if not _safe_session_id(session_id):
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw SQLite session ID is unsafe"
+                )
+            if expected_session_id is not None and session_id != expected_session_id:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw SQLite session does not bind the invocation"
+                )
+            window = connection.execute(
+                "SELECT session_key FROM session_windows WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            if window is None or window[0] != session_key:
+                raise OpenClawSessionEvidenceError(
+                    "OpenClaw SQLite session window does not bind the invocation"
+                )
+            rows = connection.execute(
+                "SELECT seq, event_json, event_zstd FROM transcript_events "
+                "WHERE session_id=? ORDER BY seq LIMIT ?",
+                (session_id, _MAX_CHAIN_RECORDS + 1),
+            ).fetchall()
+    except sqlite3.Error as error:
+        if allow_initializing and (
+            "no such table" in str(error) or "database is locked" in str(error)
+        ):
+            return None
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw SQLite session could not be read safely"
+        ) from error
+    if not rows:
+        return session_id, None
+    if len(rows) > _MAX_CHAIN_RECORDS:
+        raise OpenClawSessionEvidenceError("OpenClaw SQLite transcript is too long")
+    digest = hashlib.sha256(b"SAT OpenClaw SQLite transcript v1\0")
+    digest.update(session_id.encode("ascii") + b"\0")
+    records: list[dict[str, object]] = []
+    total_bytes = 0
+    for expected_seq, (seq, event_json, event_zstd) in enumerate(rows):
+        if (
+            seq != expected_seq
+            or not isinstance(event_json, str)
+            or event_zstd is not None
+        ):
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite transcript contains an unsupported event"
+            )
+        payload = event_json.encode("utf-8", errors="strict")
+        total_bytes += len(payload)
+        if len(payload) > _MAX_RECORD_BYTES or total_bytes > _MAX_CHAIN_BYTES:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite transcript exceeds its size limit"
+            )
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+        records.append(_load_json_object(payload, label="OpenClaw SQLite record"))
+    if records[0].get("type") != "session" or records[0].get("id") != session_id:
+        raise OpenClawSessionEvidenceError(
+            "OpenClaw SQLite transcript identity differs from the invocation"
+        )
+    return session_id, _BoundOpenClawTranscript(
+        tuple(records), digest.hexdigest(), True
+    )
 
 
 def _load_json_object(payload: bytes, *, label: str) -> dict[str, object]:
@@ -778,6 +927,34 @@ def _inspect_openclaw_session_snapshot(
 ) -> _OpenClawSessionSnapshot | None:
     """Resolve one exact session boundary and its highest safe checkpoint."""
 
+    if _uses_sqlite_sessions(state_dir, agent_id):
+        database = _require_safe_sqlite_database(state_dir, agent_id)
+        directory_snapshot = _OpenClawSessionSnapshot(
+            observation=OpenClawInitializationObservation(
+                checkpoint=InitializationCheckpoint.SESSION_DIRECTORY
+            )
+        )
+        if database is None:
+            return directory_snapshot
+        result = _read_sqlite_bound_transcript(
+            state_dir, agent_id, session_key, allow_initializing=True
+        )
+        if result is None:
+            return _OpenClawSessionSnapshot(
+                observation=OpenClawInitializationObservation(
+                    checkpoint=InitializationCheckpoint.SESSION_INDEX
+                )
+            )
+        session_id, bound = result
+        if bound is None:
+            return _OpenClawSessionSnapshot(
+                observation=OpenClawInitializationObservation(
+                    checkpoint=InitializationCheckpoint.SESSION_BOUND
+                ),
+                session_id=session_id,
+            )
+        return _snapshot_from_bound_transcript(bound, session_id, prompt)
+
     candidate = state_dir / "agents" / agent_id / "sessions"
     try:
         candidate.lstat()
@@ -829,6 +1006,14 @@ def _inspect_openclaw_session_snapshot(
         return snapshot
     if bound is None:
         return snapshot
+    return _snapshot_from_bound_transcript(bound, session_id, prompt)
+
+
+def _snapshot_from_bound_transcript(
+    bound: _BoundOpenClawTranscript, session_id: str, prompt: str
+) -> _OpenClawSessionSnapshot:
+    """Apply the same current-turn attribution to both pinned store formats."""
+
     records = bound.records
     snapshot = _OpenClawSessionSnapshot(
         observation=OpenClawInitializationObservation(
@@ -1658,25 +1843,37 @@ def capture_openclaw_tool_evidence(
 
     if not _safe_session_id(session_id):
         raise OpenClawSessionEvidenceError("OpenClaw session ID is unsafe")
-    sessions = _require_safe_session_directory(state_dir, agent_id)
-    index_payload = _read_regular_file(
-        sessions / "sessions.json",
-        limit=_MAX_INDEX_BYTES,
-        label="OpenClaw session index",
-    )
-    index = _load_json_object(index_payload, label="OpenClaw session index")
-    entry = index.get(session_key)
-    if not isinstance(entry, dict) or entry.get("sessionId") != session_id:
-        raise OpenClawSessionEvidenceError(
-            "OpenClaw session index does not bind the invocation session"
+    if _uses_sqlite_sessions(state_dir, agent_id):
+        result = _read_sqlite_bound_transcript(
+            state_dir, agent_id, session_key, expected_session_id=session_id
         )
-    bound = _read_bound_transcript(
-        sessions,
-        entry,
-        session_key=session_key,
-        session_id=session_id,
-        allow_incomplete=False,
-    )
+        if result is None:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw SQLite session does not bind the invocation"
+            )
+        bound = result[1]
+    else:
+        sessions = _require_safe_session_directory(state_dir, agent_id)
+        index_payload = _read_regular_file(
+            sessions / "sessions.json",
+            limit=_MAX_INDEX_BYTES,
+            label="OpenClaw session index",
+        )
+        index = _load_json_object(index_payload, label="OpenClaw session index")
+        entry = index.get(session_key)
+        if not isinstance(entry, dict) or entry.get("sessionId") != session_id:
+            raise OpenClawSessionEvidenceError(
+                "OpenClaw session index does not bind the invocation session"
+            )
+        bound = _read_bound_transcript(
+            sessions,
+            entry,
+            session_key=session_key,
+            session_id=session_id,
+            allow_incomplete=False,
+        )
+    if bound is None:
+        raise OpenClawSessionEvidenceError("OpenClaw session transcript is missing")
     assert bound is not None
     invocation = _current_invocation_records(bound.records, prompt=prompt)
     execution_records, runtime_rejections = _classify_runtime_rejections(invocation)

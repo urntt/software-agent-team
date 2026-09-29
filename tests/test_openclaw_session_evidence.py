@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -162,6 +163,91 @@ def write_session_state(
         encoding="utf-8",
     )
     return transcript
+
+
+def write_sqlite_session_state(
+    root: Path,
+    *,
+    invocation: AgentExecutionRequest,
+    records: list[dict[str, object]],
+    indexed_session_id: str = SESSION_ID,
+) -> Path:
+    root.chmod(0o700)
+    agent = root / "agents" / invocation.agent_id / "agent"
+    agent.mkdir(parents=True)
+    for directory in (root / "agents", agent.parent, agent):
+        directory.chmod(0o700)
+    database = agent / "openclaw-agent.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            "CREATE TABLE session_nodes "
+            "(session_key TEXT PRIMARY KEY, current_session_id TEXT NOT NULL);"
+            "CREATE TABLE session_windows "
+            "(session_id TEXT PRIMARY KEY, session_key TEXT NOT NULL);"
+            "CREATE TABLE transcript_events "
+            "(session_id TEXT NOT NULL, seq INTEGER NOT NULL, "
+            "event_json TEXT, event_zstd BLOB, PRIMARY KEY (session_id, seq));"
+        )
+        connection.execute(
+            "INSERT INTO session_nodes VALUES (?, ?)",
+            (invocation.session_key, indexed_session_id),
+        )
+        connection.execute(
+            "INSERT INTO session_windows VALUES (?, ?)",
+            (SESSION_ID, invocation.session_key),
+        )
+        connection.executemany(
+            "INSERT INTO transcript_events VALUES (?, ?, ?, NULL)",
+            [
+                (SESSION_ID, index, json.dumps(record))
+                for index, record in enumerate(records)
+            ],
+        )
+    database.chmod(0o600)
+    return database
+
+
+def test_sqlite_session_binds_current_turn_and_tool_result(tmp_path: Path) -> None:
+    invocation = request()
+    records = [
+        session_record(),
+        user_record("previous turn"),
+        assistant_record("previous answer"),
+        user_record(invocation.prompt),
+        tool_call_record("current-call", command="python /tmp/probe.py"),
+        tool_result_record("current-call", output="SQLITE_BOUND"),
+        assistant_record(),
+    ]
+    write_sqlite_session_state(tmp_path, invocation=invocation, records=records)
+
+    captured = capture(tmp_path, invocation)
+
+    assert captured.record_count == 4
+    assert len(captured.tool_calls) == 1
+    assert captured.tool_calls[0].output_excerpt == "SQLITE_BOUND"
+    assert captured.terminal_state is OpenClawInvocationTerminalState.ASSISTANT_RESPONSE
+
+
+def test_sqlite_session_rejects_wrong_session_and_incomplete_sequence(
+    tmp_path: Path,
+) -> None:
+    invocation = request()
+    records = [session_record(), user_record(invocation.prompt), assistant_record()]
+    database = write_sqlite_session_state(
+        tmp_path,
+        invocation=invocation,
+        records=records,
+        indexed_session_id="other-session",
+    )
+    with pytest.raises(OpenClawSessionEvidenceError, match="does not bind"):
+        capture(tmp_path, invocation)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE session_nodes SET current_session_id=?", (SESSION_ID,)
+        )
+        connection.execute("DELETE FROM transcript_events WHERE seq=1")
+    with pytest.raises(OpenClawSessionEvidenceError, match="unsupported event"):
+        capture(tmp_path, invocation)
 
 
 def capture(root: Path, invocation: AgentExecutionRequest):

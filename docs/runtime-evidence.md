@@ -322,8 +322,11 @@ the exact semantic-schema digest in the private binding. On reviewed compatibili
 plain assistant response, bootstrap Planning selects this exact named function at
 the provider boundary. Its materialized OpenClaw agent policy exposes only that
 submission tool, so unrelated session-history and workspace-reading tools cannot
-substitute for correction context. Dynamic Agents preserve the normal provider completion
-choice, allowing optional work/evidence tools to converge before the bound terminal
+substitute for correction context. SAT explicitly disables OpenClaw Tool Search and
+Code Mode for these bound invocations: the submission tool must remain directly
+declared in the provider request whenever a route selects it by name. Dynamic
+Agents preserve the normal provider completion choice, allowing optional
+work/evidence tools to converge before the bound terminal
 submission. A missing submission never grants assistant text semantic authority.
 For reasoning-capable Gemini routes, bootstrap Planning uses the reviewed
 provider's declared output ceiling so reasoning does not consume the smaller
@@ -593,20 +596,20 @@ the execution record. Missing or incorrect echoes such as `kind`, commit
 hashes, test status, command lists, criterion identifiers, or review scope do
 not trigger correction.
 
-For an isolated OpenClaw invocation, SAT reads the session index and exact
-session ID returned by the pinned runtime, verifies direct non-symlink paths,
-requires a complete UTF-8 JSONL transcript, finds the latest user record that
-exactly matches the current prompt, and stops at the next user turn. Tool calls
-and results in that segment must pair one-to-one by the external call ID and
-tool name. SAT then assigns stable invocation-local IDs in execution order and
-normalizes each result as terminal success, terminal failure, or nonterminal
-deferred async work. When OpenClaw compacts mid-turn into a new session file,
-SAT follows only a bounded index checkpoint chain whose session IDs, direct
-files, parent-session links, retained records, and compaction markers agree.
-It joins the original prompt and each non-duplicated continuation before
-extracting tool evidence. A missing ancestor or divergent boundary remains
-invalid; the index path alone cannot authorize a submission. The transcript
-digest then covers every segment in the chain.
+For an isolated OpenClaw invocation, SAT reads the pinned runtime's per-Agent
+SQLite session store read-only. It verifies the direct file and directory
+boundary, exact `session_nodes` key, `session_windows` ID and key, ordered
+`transcript_events` sequence, and session header. The latest user record must
+exactly match the current prompt, and attribution stops at the next user turn.
+The transcript digest covers the bounded event sequence. Unsupported compressed
+or discontinuous events fail closed; they cannot authorize a submission.
+The old JSONL reader remains only for existing replay fixtures and historical
+evidence. Remove it after those fixtures are migrated to the pinned SQLite
+shape; new runtime invocations select SQLite whenever its Agent store exists.
+Tool calls and results in the attributed segment must pair one-to-one by the
+external call ID and tool name. SAT then assigns stable invocation-local IDs in
+execution order and normalizes each result as terminal success, terminal failure,
+or nonterminal deferred async work.
 A deferred `exec` or `process` result must carry the pinned
 runtime's complete, well-formed process-handle shape without terminal fields;
 SAT validates that handle but leaves its raw identity in the private transcript.
@@ -635,7 +638,7 @@ Live progress uses a stricter projection than persisted Review evidence: the
 session observer immediately reduces tool identity to an allow-listed tool class
 and optional executable basename. Full commands, arguments, outputs, paths, and
 unknown names never enter the activity object or terminal renderer.
-Raw OpenClaw session JSONL is never copied into run artifacts; the sanitized
+Raw OpenClaw session rows are never copied into run artifacts; the sanitized
 records, transcript SHA-256, and current-turn record count make the accepted
 claim auditable without making raw session history a later replay dependency.
 

@@ -1424,6 +1424,12 @@ def materialize_run_configuration(
         }
     )
     if bootstrap_capability is not None or team_plan is not None:
+        # SAT binds a single submission tool to the invocation. OpenClaw's
+        # automatic tool discovery can hide its schema while a model-specific
+        # tool_choice still names it, producing an invalid provider request.
+        # Keep the approved tools directly visible for both Planning and runs.
+        tools["toolSearch"] = False
+        tools["codeMode"] = False
         plugin_path = artifact_submission_plugin_path()
         payload["plugins"] = {
             "enabled": True,

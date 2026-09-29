@@ -103,6 +103,26 @@ def test_tool_rejection_oracle_requires_diagnostic_and_independent_work() -> Non
         assert validation_exit_code(result) == 2
 
 
+def test_submission_contract_oracle_rejects_missing_provider_tool() -> None:
+    sample = outcome("stream")
+    sample.update(
+        {
+            "scenario": "submission-contract",
+            "response_text": None,
+            "semantic_submission": {"status": "ok"},
+            "submission_evidence_status": "accepted",
+            "server_events": [{"kind": "submission_contract", "valid": True}],
+        }
+    )
+    assert validate_matrix([sample], expected_scenarios=("submission-contract",))[
+        "passed"
+    ]
+    sample["server_events"] = [{"kind": "submission_contract", "valid": False}]
+    assert not validate_matrix([sample], expected_scenarios=("submission-contract",))[
+        "passed"
+    ]
+
+
 def test_continuation_oracle_requires_two_new_current_turns() -> None:
     sample = outcome("stream")
     first = {
