@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from pinned_runtime import pinned_openclaw_node
+from pinned_runtime import pinned_openclaw_binary, pinned_openclaw_node
 from pydantic import ValidationError
 
 import software_agent_team.runtime_configuration as runtime_configuration
@@ -218,15 +218,6 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     assert defaults["contextPruning"] == {
         "mode": "cache-ttl",
         "ttl": "2m",
-        "keepLastAssistants": 4,
-        "softTrimRatio": 0.3,
-        "hardClearRatio": 0.5,
-        "minPrunableToolChars": 12_000,
-        "softTrim": {
-            "maxChars": 6_000,
-            "headChars": 3_000,
-            "tailChars": 3_000,
-        },
         "hardClear": {
             "enabled": True,
             "placeholder": "[Earlier tool result cleared from active context]",
@@ -234,16 +225,12 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     }
     assert defaults["compaction"] == {
         "mode": "default",
-        "reserveTokens": 24_000,
         "keepRecentTokens": 12_000,
-        "reserveTokensFloor": 20_000,
-        "maxHistoryShare": 0.5,
         "recentTurnsPreserve": 2,
         "identifierPolicy": "strict",
         "midTurnPrecheck": {"enabled": True},
         "postIndexSync": "off",
         "memoryFlush": {"enabled": False},
-        "truncateAfterCompaction": True,
         "timeoutSeconds": 180,
     }
     assert defaults["skills"] == []
@@ -287,7 +274,7 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
             "nofile": {"soft": 1024, "hard": 1024},
         },
     }
-    agents = {item["id"]: item for item in payload["agents"]["list"]}
+    agents = payload["agents"]["entries"]
     assert {item["workspace"] for item in agents.values()} == {str(workspace.resolve())}
     for role in READ_ONLY_ROLES:
         assert (
@@ -296,6 +283,49 @@ def test_materialized_config_binds_every_role_to_one_run_workspace(
     for role in WRITE_ROLES:
         assert agents[role.value]["sandbox"]["workspaceAccess"] == "rw"
     assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_gemini_bootstrap_config_validates_with_pinned_openclaw(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    destination = tmp_path / "openclaw.runtime.json"
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model=GEMINI_38_FLASH_MODEL,
+        bootstrap_capability=AgentCapability.CLARIFICATION,
+    )
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert list(payload["agents"]["entries"]) == ["clarifier"]
+    assert "list" not in payload["agents"]
+    binary = pinned_openclaw_binary(REPOSITORY_ROOT)
+    result = subprocess.run(
+        [str(binary), "config", "validate", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "GEMINI_API_KEY": "test-only",
+            "HOME": str(tmp_path),
+            "OPENCLAW_STATE_DIR": str(state),
+            "OPENCLAW_CONFIG_PATH": str(destination),
+            "OPENCLAW_AGENT_DIR": "",
+            "OPENCLAW_OAUTH_DIR": str(state / "credentials"),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["valid"] is True
 
 
 def test_materialized_config_contains_only_approved_run_scoped_agents(
@@ -317,23 +347,24 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     )
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
-    agents = payload["agents"]["list"]
-    assert [agent["id"] for agent in agents] == [
+    agents = payload["agents"]["entries"]
+    assert list(agents) == [
         "cli_developer",
         "acceptance_tester",
         "quality_reviewer",
     ]
-    assert [agent.get("default", False) for agent in agents] == [True, False, False]
-    assert all(agent["workspace"] == str(workspace.resolve()) for agent in agents)
-    assert agents[0]["sandbox"]["workspaceAccess"] == "rw"
-    assert agents[1]["sandbox"]["workspaceAccess"] == "ro"
-    assert agents[2]["sandbox"]["workspaceAccess"] == "ro"
+    assert all(
+        agent["workspace"] == str(workspace.resolve()) for agent in agents.values()
+    )
+    assert agents["cli_developer"]["sandbox"]["workspaceAccess"] == "rw"
+    assert agents["acceptance_tester"]["sandbox"]["workspaceAccess"] == "ro"
+    assert agents["quality_reviewer"]["sandbox"]["workspaceAccess"] == "ro"
     assert all(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
-        for agent in agents
+        for agent in agents.values()
     )
-    assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents)
-    assert all("loopDetection" not in agent["tools"] for agent in agents)
+    assert all("sessions_spawn" in agent["tools"]["deny"] for agent in agents.values())
+    assert all("loopDetection" not in agent["tools"] for agent in agents.values())
     assert payload["plugins"]["enabled"] is True
     assert payload["plugins"]["slots"] == {"memory": "none"}
     assert payload["plugins"]["allow"] == ["sat-artifact-submission"]
@@ -346,13 +377,13 @@ def test_materialized_config_contains_only_approved_run_scoped_agents(
     assert (Path(plugin_paths[0]) / "openclaw.plugin.json").is_file()
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
     assert payload["tools"]["loopDetection"] == {"enabled": True}
-    reviewer = next(agent for agent in agents if agent["id"] == "quality_reviewer")
-    tester = next(agent for agent in agents if agent["id"] == "acceptance_tester")
+    reviewer = agents["quality_reviewer"]
+    tester = agents["acceptance_tester"]
     assert "exec" not in reviewer["tools"]["deny"]
     assert "write" in reviewer["tools"]["deny"]
     assert "exec" in tester["tools"]["deny"]
     assert "write" in tester["tools"]["deny"]
-    assert "generalist_developer" not in {agent["id"] for agent in agents}
+    assert "generalist_developer" not in agents
 
 
 def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
@@ -374,13 +405,12 @@ def test_bootstrap_runtime_contains_only_the_selected_read_only_capability(
     )
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
-    agents = payload["agents"]["list"]
-    assert [agent["id"] for agent in agents] == ["clarifier"]
-    assert agents[0]["default"] is True
-    assert agents[0]["workspace"] == str(workspace.resolve())
-    assert agents[0]["sandbox"]["workspaceAccess"] == "ro"
-    assert agents[0]["tools"] == {"allow": ["sat_submit_artifact"]}
-    assert agents[0]["model"] == {
+    agents = payload["agents"]["entries"]
+    assert list(agents) == ["clarifier"]
+    assert agents["clarifier"]["workspace"] == str(workspace.resolve())
+    assert agents["clarifier"]["sandbox"]["workspaceAccess"] == "ro"
+    assert agents["clarifier"]["tools"] == {"allow": ["sat_submit_artifact"]}
+    assert agents["clarifier"]["model"] == {
         "primary": "provider/model",
         "fallbacks": [],
     }
@@ -583,7 +613,8 @@ def test_materialized_config_removes_agent_loop_detection_override(
     payload = json.loads(destination.read_text(encoding="utf-8"))
     assert payload["tools"]["loopDetection"] == {"enabled": True}
     assert all(
-        "loopDetection" not in agent["tools"] for agent in payload["agents"]["list"]
+        "loopDetection" not in agent["tools"]
+        for agent in payload["agents"]["entries"].values()
     )
 
 
@@ -838,7 +869,7 @@ def test_dynamic_deepseek_runtime_preserves_a_terminal_completion_choice(
     assert settings["params"]["extra_body"] == {
         "thinking": {"type": "disabled"},
     }
-    agents = {item["id"]: item for item in payload["agents"]["list"]}
+    agents = payload["agents"]["entries"]
     assert "exec" not in agents["cli_developer"]["tools"]["deny"]
     assert payload["tools"]["sandbox"]["tools"]["alsoAllow"] == ["sat_submit_artifact"]
 
@@ -896,7 +927,7 @@ def test_dynamic_config_registers_compatibility_for_an_authorized_fallback(
     ] == {"thinking": {"type": "disabled"}}
     assert all(
         agent["model"] == {"primary": "provider/model", "fallbacks": []}
-        for agent in payload["agents"]["list"]
+        for agent in payload["agents"]["entries"].values()
     )
     assert payload["models"]["providers"]["deepseek"]["apiKey"] == (
         "${DEEPSEEK_API_KEY}"

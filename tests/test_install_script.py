@@ -215,7 +215,7 @@ fi
     write_executable(
         openclaw_prefix / "bin/openclaw",
         """#!/usr/bin/env bash
-echo 'OpenClaw 2026.7.1-2 (test)'
+echo 'OpenClaw 2026.9.6 (test)'
 """,
     )
     write_executable(
@@ -223,7 +223,7 @@ echo 'OpenClaw 2026.7.1-2 (test)'
         """#!/usr/bin/env bash
 [[ -z "${STATE_DIRECTORY-}${NODE_OPTIONS-}${NODE_PATH-}" ]] || exit 9
 if [[ "${1:-}" == */entry.js ]]; then
-  echo 'OpenClaw 2026.7.1-2 (test)'
+  echo 'OpenClaw 2026.9.6 (test)'
 else
   echo 'v24.19.0'
 fi

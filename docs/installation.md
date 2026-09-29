@@ -38,7 +38,7 @@ Docker, change subordinate-ID allocation, enable lingering, or request sudo.
 If the host does not provide those prerequisites, its administrator must
 prepare the daemon or you must use a different supported host.
 
-SAT pins Python 3.12, OpenClaw 2026.7.1-2, OpenClaw's local Node.js 24.19.0
+SAT pins Python 3.12, OpenClaw 2026.9.6, OpenClaw's local Node.js 24.19.0
 runtime, Python dependencies through `uv.lock`, and the generated-code sandbox
 image through `configs/product-policy.json`.
 

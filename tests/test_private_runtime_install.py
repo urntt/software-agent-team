@@ -83,7 +83,7 @@ case "$1" in
     exit "${NPM_EXIT:-0}" ;;
   */entry.js)
     [[ "$2" == --version ]] || exit 10
-    echo "OpenClaw ${REPORTED_VERSION:-2026.7.1-2}" ;;
+    echo "OpenClaw ${REPORTED_VERSION:-2026.9.6}" ;;
   *) exit 11 ;;
 esac
 """,
@@ -128,7 +128,7 @@ done
 case "$url" in
  https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-*.tar.gz)
    cp "$NODE_ARCHIVE" "$out"; kind=node ;;
- https://registry.npmjs.org/openclaw/-/openclaw-2026.7.1-2.tgz)
+ https://registry.npmjs.org/openclaw/-/openclaw-2026.9.6.tgz)
    cp "$PACKAGE_ARCHIVE" "$out"; kind=package ;;
  *) exit 12 ;;
 esac
@@ -170,7 +170,7 @@ def test_private_install_verifies_pins_and_never_calls_gateway(tmp_path: Path) -
         [str(launcher), "--version"], env=environment, capture_output=True, text=True
     )
     assert probe.returncode == 0
-    assert "2026.7.1-2" in probe.stdout
+    assert "2026.9.6" in probe.stdout
     assert "gateway" not in Path(environment["CALL_LOG"]).read_text()
     downloads = Path(environment["DOWNLOAD_LOG"]).read_text()
     assert "install-cli" not in downloads

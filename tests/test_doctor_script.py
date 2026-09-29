@@ -24,7 +24,7 @@ def prepare(root: Path) -> dict[str, str]:
         shutil.copy2(ROOT / name, root / name)
     prefix = root / ".sat/openclaw"
     for relative, output in (
-        ("bin/openclaw", "OpenClaw 2026.7.1-2"),
+        ("bin/openclaw", "OpenClaw 2026.9.6"),
         ("tools/node-v24.19.0/bin/node", "v24.19.0"),
     ):
         executable = prefix / relative
