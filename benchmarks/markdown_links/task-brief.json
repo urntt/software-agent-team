@@ -1,0 +1,39 @@
+{
+  "run_id": "markdown_links-comparison",
+  "title": "Offline Markdown link checker",
+  "source_request": "Build a reusable local Markdown link checker for individual developers. The primary workflow is selecting a directory, scanning Markdown files below it, and reporting broken relative file or fragment links with source file and line. Deliver a usable Python command-line application that runs without network access. It must handle nested directories, relative paths, duplicate filenames, fragments, and malformed links without changing the source files. A successful scan should exit zero; broken links should produce a nonzero exit and actionable diagnostics. Include tests for valid, broken, nested, and malformed cases; user documentation must show installation, scan, and test commands. The first version does not check remote HTTP links and does not need a Web interface. Keep results deterministic across repeated scans and do not contact external services during normal use.",
+  "requirements": [
+    "Expose python -m linkcheck ROOT --json as the command-line entry point.",
+    "Recursively scan Markdown files below ROOT for inline local links; ignore http and https links without fetching them.",
+    "Resolve relative file links and heading fragments; a heading fragment is the lowercase hyphen-joined heading words.",
+    "For valid links, print JSON with a broken_links array and exit zero; for broken local links, include source file and line in broken_links and exit nonzero.",
+    "Provide pytest coverage and a README with installation, usage, tests, and limitations."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_OUTPUT",
+      "description": "Valid local files and heading fragments pass with an empty broken_links array.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_ERRORS",
+      "description": "Broken local files or fragments fail with source location evidence.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "The package compiles, passes Ruff and pytest, and has usable documentation.",
+      "verification": "Run the frozen deterministic gates."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12 and the standard library at runtime.",
+    "Keep code, tests, and documentation in the supplied repository.",
+    "Do not access the network or a hosted service."
+  ],
+  "assumptions": [
+    "Markdown inputs use ordinary inline links and small local files."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}

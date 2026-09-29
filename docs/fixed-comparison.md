@@ -15,6 +15,9 @@ The checked-in comparison fixtures are:
 | --- | --- | --- |
 | Task-management Web app | `benchmarks/task_manager/comparison-benchmark.json` | `benchmarks/task_manager/seed/` |
 | Offline text statistics CLI | `benchmarks/text_stats/benchmark.json` | `benchmarks/text_stats/seed/` |
+| Offline Markdown link checker | `benchmarks/markdown_links/benchmark.json` | `benchmarks/markdown_links/seed/` |
+| Offline invoice CSV totals CLI | `benchmarks/csv_invoice/benchmark.json` | `benchmarks/csv_invoice/seed/` |
+| Offline recursive JSON merge CLI | `benchmarks/json_merge/benchmark.json` | `benchmarks/json_merge/seed/` |
 
 The task-manager comparison fixture (`task_manager_structure_comparison_v2`)
 retains its functional acceptance suite, including same-origin absolute
@@ -25,6 +28,10 @@ external rubric after each arm. The separate fixture prevents the baseline
 from claiming that a nonexistent independent Reviewer passed them. The text
 statistics fixture checks exact CLI behavior, error paths, generated tests,
 lint, and documentation with the same deterministic commands in both arms.
+The three additional CLI fixtures check local Markdown file and heading links,
+exact decimal invoice totals, and recursive object merge semantics. Each has
+task-specific positive and negative black-box cases in a read-only acceptance
+mount, plus the same compile, lint, generated-test, and README requirements.
 These fixtures do not replace the original Phase 1 task-manager benchmark.
 
 For each request and arm, use a fresh run ID and a fresh clean Git repository

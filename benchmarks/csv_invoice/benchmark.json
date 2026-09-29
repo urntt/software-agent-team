@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "csv_invoice_structure_comparison_v1",
+  "policy_id": "phase1_deterministic",
+  "task_brief": "task-brief.json",
+  "input_mounts": [
+    {
+      "id": "acceptance_suite",
+      "source": "acceptance",
+      "target": "/opt/software-agent-team/inputs/csv-invoice-acceptance",
+      "read_only": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "CHECK_COMPILE",
+      "argv": [
+        "python",
+        "-m",
+        "compileall",
+        "-q",
+        "invoice_totals",
+        "tests"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 30,
+      "criterion_ids": [
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_LINT",
+      "argv": [
+        "python",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 60,
+      "criterion_ids": [
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_PROJECT_TESTS",
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 90,
+      "criterion_ids": [
+        "AC_QUALITY"
+      ]
+    },
+    {
+      "id": "CHECK_ACCEPTANCE",
+      "argv": [
+        "python",
+        "/opt/software-agent-team/inputs/csv-invoice-acceptance/run.py",
+        "--repository",
+        "/workspace"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 90,
+      "criterion_ids": [
+        "AC_OUTPUT",
+        "AC_ERRORS",
+        "AC_QUALITY"
+      ]
+    }
+  ],
+  "manual_review_criteria": []
+}

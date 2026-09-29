@@ -1,0 +1,39 @@
+{
+  "run_id": "csv_invoice-comparison",
+  "title": "Offline invoice CSV totals CLI",
+  "source_request": "Build a usable local Python 3.12 CLI for freelancers. Read a UTF-8 CSV file with date, client, and amount columns, then print JSON totals per client using exact decimal arithmetic. Reject missing columns and invalid amounts with a nonzero exit and useful stderr. Include tests and a README covering setup, usage, tests, and limits. Use no network service or credentials.",
+  "requirements": [
+    "Expose python -m invoice_totals PATH --json as the command-line entry point.",
+    "Read a UTF-8 CSV file with date, client, and amount columns, and sum amounts per client using decimal arithmetic.",
+    "Print one JSON object with a totals object mapping each client to a two-decimal string.",
+    "Reject missing required columns, invalid decimal amounts, and missing files with a nonzero exit and useful stderr, without success JSON.",
+    "Provide pytest coverage and a README with installation, usage, tests, and limitations."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_OUTPUT",
+      "description": "Valid CSV inputs yield exact decimal totals per client.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_ERRORS",
+      "description": "Malformed CSV, invalid amounts, and missing files fail cleanly.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "The package compiles, passes Ruff and pytest, and has usable documentation.",
+      "verification": "Run the frozen deterministic gates."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12 and the standard library at runtime.",
+    "Keep code, tests, and documentation in the supplied repository.",
+    "Do not access the network or a hosted service."
+  ],
+  "assumptions": [
+    "Input invoices fit into memory and each amount uses a period as decimal separator."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}

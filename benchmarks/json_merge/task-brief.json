@@ -1,0 +1,39 @@
+{
+  "run_id": "json_merge-comparison",
+  "title": "Offline recursive JSON merge CLI",
+  "source_request": "Build a usable local Python 3.12 CLI for developers. Given two UTF-8 JSON object files, recursively merge object keys, replace arrays and scalars with the right-hand value, and print the merged object as JSON. Reject invalid JSON and non-object roots with a nonzero exit and useful stderr. Include tests and a README covering setup, usage, tests, and limits. Use no network service or credentials.",
+  "requirements": [
+    "Expose python -m jsonmerge LEFT RIGHT as the command-line entry point.",
+    "Read two UTF-8 JSON object files and recursively merge object keys; the right-hand value replaces arrays and scalars.",
+    "Print exactly one merged JSON object to stdout on success.",
+    "Reject invalid JSON, non-object roots, and missing files with a nonzero exit and useful stderr, without success JSON.",
+    "Provide pytest coverage and a README with installation, usage, tests, and limitations."
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC_OUTPUT",
+      "description": "Nested objects merge recursively and right-hand arrays and scalars replace left-hand values.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_ERRORS",
+      "description": "Invalid JSON, non-object roots, and missing paths fail cleanly.",
+      "verification": "Run the frozen deterministic gates."
+    },
+    {
+      "id": "AC_QUALITY",
+      "description": "The package compiles, passes Ruff and pytest, and has usable documentation.",
+      "verification": "Run the frozen deterministic gates."
+    }
+  ],
+  "constraints": [
+    "Use Python 3.12 and the standard library at runtime.",
+    "Keep code, tests, and documentation in the supplied repository.",
+    "Do not access the network or a hosted service."
+  ],
+  "assumptions": [
+    "Input JSON documents fit into memory."
+  ],
+  "open_questions": [],
+  "confirmed": true
+}
