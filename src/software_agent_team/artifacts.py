@@ -1236,10 +1236,26 @@ class AgentExecutionRecord(BaseModel):
         )
         if self.timed_out:
             if self.exit_code is not None and self.exit_code > 0:
-                raise ValueError(
-                    "timed-out executions require no exit, a zero wrapper exit, "
-                    "or a terminating signal"
+                shutdown = (
+                    None
+                    if self.invocation_lifecycle is None
+                    else self.invocation_lifecycle.shutdown
                 )
+                if not (
+                    shutdown is not None
+                    and shutdown.reason
+                    in {
+                        InvocationStopReason.RUN_DEADLINE,
+                        InvocationStopReason.EVALUATION_TIMEOUT,
+                    }
+                    and shutdown.terminate_sent
+                    and shutdown.exit_code == self.exit_code
+                ):
+                    raise ValueError(
+                        "timed-out executions require no exit, a zero wrapper "
+                        "exit, a terminating signal, or an owned timeout "
+                        "lifecycle matching the wrapper exit"
+                    )
             if self.error is None:
                 raise ValueError("timed-out executions must record an error")
             if self.response_artifact is not None:

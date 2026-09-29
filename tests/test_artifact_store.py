@@ -1154,6 +1154,62 @@ def test_live_initialization_wait_survives_invocation_settlement_and_storage(tmp
     assert ledger.call_records()[0].cache_usage == CacheTokenUsage()
 
 
+def test_owned_timeout_wrapper_exit_survives_settlement_and_storage(tmp_path):
+    from test_execution import FAKE_OPENCLAW_SETUP, live_liveness_executor, request
+
+    from software_agent_team.budgets import AgentBudgetLedger
+    from software_agent_team.execution import AgentExecutionStatus
+    from software_agent_team.invocation import persist_agent_invocation
+    from software_agent_team.invocation_lifecycle import InvocationStopReason
+
+    invocation = request(timeout_seconds=1, model="provider/model")
+    program = (
+        FAKE_OPENCLAW_SETUP
+        + "\nimport signal\n"
+        + "signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))\n"
+        + "for index in range(300):\n"
+        + "    time.sleep(0.05)\n"
+        + "    append_raw(f'progress {index}')\n"
+    )
+    executor = live_liveness_executor(
+        tmp_path,
+        program,
+        process_grace_seconds=0.10,
+    )
+    store = make_store(tmp_path)
+    ledger = AgentBudgetLedger(store.team_plan.budget)
+    reservation = ledger.reserve_call(invocation.agent_id)
+    result = executor.execute(invocation)
+
+    assert result.status is AgentExecutionStatus.TIMED_OUT
+    assert result.telemetry.exit_code == 1
+    assert result.telemetry.invocation_lifecycle is not None
+    assert (
+        result.telemetry.invocation_lifecycle.shutdown.reason
+        is InvocationStopReason.EVALUATION_TIMEOUT
+    )
+    persisted = persist_agent_invocation(
+        artifact_store=store,
+        budget_ledger=ledger,
+        reservation=reservation,
+        request=invocation,
+        result=result,
+        stage="plan",
+        attempt=1,
+        response_reference=None,
+        error=result.error,
+        controller_supplied_fields=(),
+        ignored_controller_fields=(),
+        pricing=None,
+    )
+    record = store.load(persisted.reference)
+    assert record.execution_status is AgentExecutionStatus.TIMED_OUT
+    assert record.exit_code == 1
+    assert record.invocation_lifecycle == result.telemetry.invocation_lifecycle
+    assert ledger.snapshot().calls_completed == 1
+    assert ledger.snapshot().unreported_token_calls == 1
+
+
 def test_execution_outputs_are_write_once_and_stage_bound(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     arguments = {

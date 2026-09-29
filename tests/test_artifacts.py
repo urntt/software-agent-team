@@ -618,6 +618,57 @@ def test_timed_out_execution_record_accepts_actual_termination_signal() -> None:
     assert record.invocation_lifecycle.shutdown.signal == 15
 
 
+def test_timed_out_execution_preserves_owned_positive_wrapper_exit() -> None:
+    payload = valid_execution_payload()
+    lifecycle = lifecycle_payload("evaluation_timeout", exit_code=1)
+    lifecycle["shutdown"]["terminate_sent"] = True
+    payload.update(
+        {
+            "execution_status": "timed_out",
+            "timed_out": True,
+            "exit_code": 1,
+            "error": "Controlled evaluation timeout stopped the invocation.",
+            "response_artifact": None,
+            "invocation_lifecycle": lifecycle,
+        }
+    )
+
+    record = AgentExecutionRecord.model_validate(payload)
+
+    assert record.exit_code == 1
+    assert record.invocation_lifecycle is not None
+    assert record.invocation_lifecycle.shutdown.terminate_sent
+
+
+@pytest.mark.parametrize(
+    ("reason", "terminate_sent"),
+    [
+        ("evaluation_timeout", False),
+        ("process_failure", True),
+    ],
+)
+def test_positive_wrapper_exit_cannot_claim_unowned_timeout(
+    reason: str,
+    terminate_sent: bool,
+) -> None:
+    payload = valid_execution_payload()
+    lifecycle = lifecycle_payload(reason, exit_code=1)
+    lifecycle["shutdown"]["terminate_sent"] = terminate_sent
+    payload.update(
+        {
+            "execution_status": "timed_out",
+            "timed_out": True,
+            "exit_code": 1,
+            "error": "The invocation timed out.",
+            "response_artifact": None,
+            "invocation_lifecycle": lifecycle,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="timed-out executions require"):
+        AgentExecutionRecord.model_validate(payload)
+
+
 def test_execution_record_preserves_response_binding_and_stage_budget() -> None:
     payload = valid_execution_payload()
     payload.update(

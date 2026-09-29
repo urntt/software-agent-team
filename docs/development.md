@@ -789,6 +789,13 @@ evidence, require a later terminal `process` result independently, and still
 require the invocation-bound terminal submission. Deferred evidence must never
 support a satisfied Review claim. Unknown status values, malformed handles, and
 running shapes with terminal fields fail closed.
+
+An owned deadline or controlled-evaluation timeout may leave a positive wrapper
+exit when OpenClaw handles SAT's termination request and exits itself. Preserve
+that real exit only when the invocation lifecycle records the matching timeout
+reason, terminate request, and exit code; unowned positive exits cannot claim a
+timeout. Missing provider usage remains unknown rather than estimated from the
+exit status.
 Initialization file-race tests must distinguish an exact open-time missing file
 from malformed or unsafe evidence and must cover atomic publication between
 observations. Do not infer an earlier `open` result from a later `exists` check.
