@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from pinned_runtime import pinned_openclaw_binary
+from pinned_runtime import pinned_openclaw_binary, pinned_openclaw_node
 from pydantic import ValidationError
 
 from software_agent_team.model_routing import (
@@ -294,6 +294,52 @@ def test_gemini_38_flash_profile_is_available_in_pinned_openclaw(
     assert matches[0]["available"] is True
     assert matches[0]["contextWindow"] == 1_048_576
     assert matches[0]["input"] == "text+image"
+
+
+def test_pinned_google_adapter_never_maps_gemini_38_to_minimal(
+    tmp_path: Path,
+) -> None:
+    model = "google/gemini-3.8-flash"
+    assert openclaw_invocation_thinking_level(runtime_profile_for_model(model)) == (
+        "medium"
+    )
+    node = pinned_openclaw_node(REPOSITORY_ROOT)
+    dist = node.parent.parent / "lib/node_modules/openclaw/dist"
+    modules = [
+        path
+        for path in dist.glob("provider-stream-shared-*.mjs")
+        if "function resolveGoogleGemini3ThinkingLevel(" in path.read_text()
+    ]
+    assert len(modules) == 1, "review Gemini adapter compatibility after an update"
+    result = subprocess.run(
+        [
+            str(node),
+            "--input-type=module",
+            "-e",
+            """
+const functions = await import(process.argv[1]);
+const resolve = Object.values(functions).find(
+    value => value.name === 'resolveGoogleGemini3ThinkingLevel');
+const modelId = 'gemini-3.8-flash';
+console.log(JSON.stringify({
+    medium: resolve({modelId, thinkingLevel: 'medium'}),
+    off: resolve({modelId, thinkingLevel: 'off'}),
+    zeroBudget: resolve({modelId, thinkingBudget: 0}),
+}));
+""",
+            modules[0].as_uri(),
+        ],
+        env={"HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert json.loads(result.stdout) == {
+        "medium": "MEDIUM",
+        "off": "LOW",
+        "zeroBudget": "LOW",
+    }
 
 
 @pytest.mark.parametrize(
