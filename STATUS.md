@@ -22,7 +22,7 @@ DeepSeek task on the published `v0.5.2` reached first Planning but failed when
 the provider rejected a named submission-tool choice absent from the request's
 direct tool list. It did not reach approval or delivery.
 
-The subsequent main-branch fix keeps bound submission tools directly visible
+The `0.5.3` candidate in this checkout keeps bound submission tools directly visible
 and reads the pinned OpenClaw 2026.9.6 per-Agent SQLite session evidence. A
 local mock-provider invocation through the actual OpenClaw and SAT execution
 adapter accepted a bound Planning submission; its provider request, tool

@@ -1,27 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.5.1",
-  "target_version": "0.5.2",
+  "baseline_version": "0.5.2",
+  "target_version": "0.5.3",
   "changes": [
     {
-      "id": "planning-and-runner-structure",
+      "id": "direct-bound-submission-tools",
       "impact": "patch",
-      "summary": "Separate Planning normalization and dynamic invocation decisions while preserving typed validation and response authority"
+      "summary": "Keep the bound submission tool directly declared when OpenClaw calls a provider with an exact named tool choice"
     },
     {
-      "id": "owned-timeout-evidence",
+      "id": "sqlite-session-evidence",
       "impact": "patch",
-      "summary": "Persist controlled Agent timeout lifecycle and the actual positive wrapper exit together"
-    },
-    {
-      "id": "pinned-openclaw-compatibility",
-      "impact": "patch",
-      "summary": "Update the isolated OpenClaw pin and keyed configuration with compatible Gemini thinking fallback"
-    },
-    {
-      "id": "fixed-comparison-fixtures",
-      "impact": "patch",
-      "summary": "Add frozen Markdown, JSON merge, and CSV evaluation fixtures for the existing fixed-topology comparison"
+      "summary": "Attribute bounded current-turn tool and submission evidence from the pinned OpenClaw per-Agent SQLite session store"
     }
   ]
 }
