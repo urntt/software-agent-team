@@ -9,24 +9,28 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.5.3`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.3),
-tagged at `be3af3a9a9d6c63968ee3559429dfb40c1298c09`. Its exact-tag
+The latest published stable release is [`v0.5.4`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.4),
+tagged at `d3ad2a7440ca4d148ecb31fbcbb628b1d4b4fd62`. Its exact-tag
 GitHub gate passed and published release-bound `bootstrap.sh` and
 `sat-release.json` assets; the candidate passed the OVH canonical gate with
-1,990 tests passing and one root-only fixture skipped. A new ordinary account
+1,994 tests passing and one root-only fixture skipped. A new ordinary account
 installed that public stable, completed first configuration and a subsequent
-startup self-check, then stopped in real DeepSeek Planning. The pinned OpenClaw
-stored a large current-turn event as zstd in its per-Agent SQLite session;
-SAT's `v0.5.3` reader rejected compressed events and terminated the invocation
-before an approvable proposal. Provider billing for that interrupted call is
-unknown. The account and owned resources were cleaned after evidence capture.
+startup self-check. Real DeepSeek Planning then returned a 333-character
+question-option description, exceeding its 300-character display limit. The
+targeted whole-question correction omitted the nested validation error, and
+the model resubmitted an overlong description. No proposal was approved or
+delivered. The account and owned resources were cleaned after screened evidence
+capture. The two Planning calls have recorded usage, but external billing is
+not independently known.
 
-The `0.5.4` candidate in this checkout decodes bounded zstd SQLite events.
-The actual pinned OpenClaw, SAT execution adapter, and a local mock provider
-completed a bound submission with a compressed event; 140 related focused
-tests passed. This is offline integration evidence, not a published-release or
-provider-backed ordinary-user success. A canonical gate and new ordinary-user
-validation remain outstanding.
+The `0.5.5` candidate in this checkout projects nested errors into authorized
+parent correction slots and bounds only advisory option-description prose
+before strict validation, marking omitted text with an ellipsis. The raw
+submission and normalization remain in the turn; exact option IDs and product
+definition values are retained. The archived 333-character submission now
+validates as a three-option question with a 300-character description. The
+Planning and response-correction focused suite passed 293 tests. A new
+canonical gate and published ordinary-user validation remain outstanding.
 
 The earlier `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
 and 13/13 independent black-box checks. That historical success does not
@@ -96,7 +100,7 @@ establish the current candidate's provider-backed behavior.
 ## Validation limits and open capabilities
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
-and single-route delivery path. The `v0.5.2` stable installation checks cover
+and single-route delivery path. The `v0.5.4` stable installation checks cover
 identity and lifecycle, while its first provider-backed task failed in Planning.
 The newer checkout fix has not yet completed a provider-backed task. None establishes a
 fresh WSL recovery run,

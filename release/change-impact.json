@@ -1,12 +1,17 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.5.3",
-  "target_version": "0.5.4",
+  "baseline_version": "0.5.4",
+  "target_version": "0.5.5",
   "changes": [
     {
-      "id": "bounded-sqlite-zstd-events",
+      "id": "bounded-question-option-description",
       "impact": "patch",
-      "summary": "Decode bounded compressed current-turn SQLite events from the pinned OpenClaw runtime while retaining fail-closed attribution"
+      "summary": "Bound advisory Planning option descriptions before strict validation while retaining raw submission and exact decision values"
+    },
+    {
+      "id": "nested-correction-diagnostics",
+      "impact": "patch",
+      "summary": "Show child validation errors within authorized parent correction slots without widening replacement authority"
     }
   ]
 }
