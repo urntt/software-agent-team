@@ -9,31 +9,20 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is `v0.5.1`, tagged at
-`6de24f48d54b995f5dd09493f0345e644e82c72b`. Its exact-tag GitHub gate
-passed and published the release-bound `bootstrap.sh` and `sat-release.json`
-assets. The same clean commit passed a normal-user OVH canonical gate: doctor,
-format, lint, and 1,978 tests passed; one cross-UID fixture was skipped because
-it requires root. Isolated fresh-account checks installed both the exact dev
-candidate and the public current stable, verified identity and isolated runtime,
-and completed export, uninstall, and exact cleanup without provider calls.
-The patch constrains each Review boundary to one distinct post-assertion
-evidence marker. A fresh public stable installation on Linux completed the
-official DeepSeek provider check, subsequent startup, four Planning calls,
-user approval, run controls, an unchanged Integration handoff, all three
-independent Reviews, and accepted delivery. The Security Reviewer corrected
-two invalid evidence attempts within its approved scope before acceptance.
-The delivered project passed 13/13 independent black-box checks, followed by
-export, uninstall, and exact account cleanup. The run recorded 13 model calls,
-an estimated $0.225933 in model spend, and no unknown-cost calls under its
-$1.50 authorization. These observations apply to the tagged DeepSeek/Linux
-route; they do not establish another provider or host mode.
+The latest published stable release is [`v0.5.2`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.2),
+tagged at `e26268f0eedfd17101c6c92839fb6eedfc3fae81`. Its exact-tag
+GitHub gate passed doctor, formatting, lint, and 1,984 tests (four environment
+fixtures skipped), and published the release-bound `bootstrap.sh` and
+`sat-release.json` assets. The same clean commit passed a normal-user OVH
+canonical gate with 1,987 tests passing and one root-only fixture skipped.
+Fresh-account checks installed the exact dev candidate and the public current
+stable, verified release identity and isolated runtime paths, then completed
+export, uninstall, and exact cleanup without provider calls. A provider-backed
+ordinary-user task on `v0.5.2` remains unvalidated.
 
-The checkout now declares `0.5.2` as an unpublished patch candidate for the
-Planning and runner structure changes, owned timeout evidence, isolated
-OpenClaw compatibility update, and fixed-comparison fixtures described below.
-Its release identity and ordinary-user evidence remain pending until an exact
-clean candidate is gated, published, and installed from the stable channel.
+The previous `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
+and 13/13 independent black-box checks. That historical success does not
+establish `v0.5.2` provider-backed behavior or another provider/host mode.
 
 ## Implemented in the checkout
 
@@ -64,6 +53,12 @@ clean candidate is gated, published, and installed from the stable channel.
   an approved task. `implementation_domain_specialized` remains a defined but
   non-executable manifest entry. The comparison procedure is in
   [`docs/fixed-comparison.md`](docs/fixed-comparison.md).
+  A later five-task DeepSeek comparison delivered 5/5 with the single Agent
+  and 3/5 with the fixed team; independent black-box acceptance passed all ten
+  final Git snapshots. Two fixed-team runs stopped on invalid Reviewer output,
+  so code acceptance cannot be counted as SAT delivery. A Gemini free-tier
+  attempt returned HTTP 429 in its first cell and provided no paired outcome.
+  These observations do not justify changing the ordinary-user team default.
 - Planning's wire and typed checks share one owner for user-only product
   decisions. Pure response-envelope and path normalization has a separate
   module; a content-free rule-audit tool can aggregate persisted Planning
@@ -93,15 +88,17 @@ clean candidate is gated, published, and installed from the stable channel.
 ## Validation limits and open capabilities
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
-and single-route delivery path. It does not establish a fresh WSL recovery run,
+and single-route delivery path. The `v0.5.2` stable installation checks cover
+identity and lifecycle without a provider-backed task. Neither establishes a
+fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
 provider switch, manual slow-key terminal usability, or paths requiring a
 specific failure or later implementation iteration. Those conditions need
 their own targeted evidence.
 
-The two-request, one-route comparison is too small to establish general
-quality, cost, or latency superiority, and it does not include a frozen
-task-defined TeamPlan or a browser-based keyboard-only walkthrough.
+The five-task, one-complete-route comparison is too small to establish general
+quality, cost, or latency superiority. The second route stopped at a provider
+quota boundary, and browser-based keyboard-only interaction was not assessed.
 Comparative results must continue to hold task, route, budget, and acceptance
 criteria constant and report failures as well as successes.
 Generated-project execution remains limited to the current local Python 3.12
