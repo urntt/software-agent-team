@@ -11,6 +11,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch CLI work, loading the workflow graph only when it is needed."""
 
     arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ("uninstall",):
+        from software_agent_team.uninstall_command import uninstall
+
+        return uninstall(arguments[1:])
     if arguments in {("--help",), ("-h",)}:
         from software_agent_team._cli_help import ROOT_HELP
 

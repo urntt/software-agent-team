@@ -939,6 +939,11 @@ src/software_agent_team/
   planning.py                  Adaptive dialogue, proposals, approval, and evidence
   product.py                   Diagnostics, source preparation, and delivery
   progress.py                  RunEvent journal and terminal rendering
+  terminal_dashboard.py        Shared persistent command/answer editor and layout
+  planning_terminal.py         Planning phase controls and cancellation boundary
+  terminal_metrics.py          Read-only budget, elapsed, context, and Git display
+  terminal_presentation.py     Bounded attributable tool/model content previews
+  uninstall_command.py        Lightweight dispatch to the uninstall lifecycle
   process_lifecycle.py         Durable provider-process ownership and recovery
   prompting.py                 Fixed-role and task-defined capability prompts
   quality_gates.py             Fixed sandboxed command runner

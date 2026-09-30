@@ -228,7 +228,7 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert "Failure and delivery boundary:" in overview
 
 
-def test_standard_planning_overview_is_human_summary_with_details_on_demand() -> None:
+def test_compact_planning_overview_is_summary_and_compact_keeps_full_plan() -> None:
     preview = preview_adaptive_proposal(
         request(),
         proposal(body=proposal_body()),
@@ -236,23 +236,27 @@ def test_standard_planning_overview_is_human_summary_with_details_on_demand() ->
         created_at=FIXED_TIME,
     )
 
-    standard = render_planning_overview(
+    compact = render_planning_overview(
         preview,
-        visibility="standard",
+        visibility="compact",
         color=True,
     )
     detailed = render_planning_overview(preview, visibility="detailed")
 
-    assert "\x1b[1;36mPlanning overview\x1b[0m" in standard
-    assert "What the team will build:" in standard
-    assert "Acceptance checks:" in standard
-    assert "Team:" in standard
-    assert "Technical details: hidden" in standard
-    assert "Requirement-to-evidence traceability:" not in standard
-    assert "acceptance authority:" not in standard
-    assert "authorized fallback profiles:" not in standard
+    assert "\x1b[1;36mPlanning overview\x1b[0m" in compact
+    assert "What the team will build:" in compact
+    assert "Acceptance checks:" in compact
+    assert "Team:" in compact
+    assert "Technical details: hidden" in compact
+    assert "Requirement-to-evidence traceability:" not in compact
+    assert "acceptance authority:" not in compact
+    assert "authorized fallback profiles:" not in compact
     assert "Requirement-to-evidence traceability:" in detailed
     assert "authorized fallback profiles:" in detailed
+
+    standard = render_planning_overview(preview, visibility="standard")
+    assert "Requirement-to-evidence traceability:" in standard
+    assert "authorized fallback profiles:" in standard
 
 
 def test_writer_responsibility_uses_owned_tasks_not_role_prose() -> None:
@@ -5335,7 +5339,7 @@ def test_materially_different_requests_compile_distinct_specialist_contracts() -
     ) != experience.team_plan.model_dump(mode="json")
     security_overview = render_planning_overview(security)
     experience_overview = render_planning_overview(experience)
-    standard_security = render_planning_overview(security, visibility="standard")
+    standard_security = render_planning_overview(security, visibility="compact")
     assert "[general review]:" in standard_security
     assert "[security assessment]:" in standard_security
     assert "acceptance authority: security" in security_overview
@@ -12258,6 +12262,7 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
         planning_request,
         read=read,
         write=output.append,
+        progress_visibility="compact",
     )
 
     assert approved is not None
@@ -12267,7 +12272,7 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     assert len(executor.requests) == 3
     rendered = "\n".join(output)
     assert "Planning question" in rendered
-    assert "Decision boundary: product_requirement / user" in rendered
+    assert "Decision boundary: product requirement / your choice" in rendered
     assert "Missing evidence:" in rendered
     assert "What this can change:" in rendered
     assert "Planning is waiting for provider/model" in rendered

@@ -126,6 +126,7 @@ from software_agent_team.teams import (
     TeamPlan,
     TeamPlanOrigin,
 )
+from software_agent_team.terminal_presentation import InvocationPresentation
 
 
 class DynamicQualityGate(Protocol):
@@ -1437,6 +1438,7 @@ class DynamicAgentRunner:
         budget_usage: AgentBudgetUsage | None = None,
         references: tuple[RunEventReference, ...] = (),
         checkpoint: ProgressCheckpointSnapshot | None = None,
+        presentation: InvocationPresentation | None = None,
     ) -> None:
         """Project one safe invocation checkpoint without changing runtime state."""
 
@@ -1457,6 +1459,7 @@ class DynamicAgentRunner:
                 dependency_ids=agent.dependencies,
                 budget_usage=budget_usage,
                 checkpoint=checkpoint,
+                presentation=presentation,
                 references=references,
             )
         )
@@ -1800,6 +1803,7 @@ class DynamicAgentRunner:
             attempt=attempt,
             model=activity.model,
             duration_ms=activity.elapsed_ms,
+            presentation=activity.presentation,
             checkpoint=self._checkpoint_snapshot(
                 agent,
                 phase=phase,

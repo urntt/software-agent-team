@@ -75,6 +75,27 @@ def manager(root: Path) -> GitWorkspaceManager:
     return GitWorkspaceManager(root, clock=lambda: FIXED_TIME)
 
 
+def test_live_diff_counts_tracked_and_untracked_text_without_running_config(
+    tmp_path: Path,
+) -> None:
+    source = initialize_repository(tmp_path)
+    workspace_manager = manager(tmp_path / "workspaces")
+    workspace = workspace_manager.prepare("display", source_repository=source)
+    repository = Path(workspace.workspace_path)
+    (repository / "README.md").write_text("replacement\nsecond\n")
+    (repository / "new.txt").write_text("one\ntwo\n")
+    (repository / "outside-link").symlink_to(source / "README.md")
+    marker = tmp_path / "marker"
+    monitor = tmp_path / "fsmonitor"
+    monitor.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    monitor.chmod(0o755)
+    git(repository, "config", "core.fsmonitor", str(monitor))
+    assert workspace_manager.live_change_counts(
+        repository, base_commit=workspace.base_commit
+    ) == (4, 1, True)
+    assert not marker.exists()
+
+
 def commit_change(workspace: Path, name: str = "app.py") -> str:
     """Commit one implementation change and return its full commit ID."""
 

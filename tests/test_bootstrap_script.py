@@ -140,7 +140,7 @@ def test_bootstrap_defaults_to_stable_and_never_passes_a_moving_ref(
     assert "bootstrap: release=v0.4.32 revision=" in first.stdout
     assert "bootstrap: channel=stable" in first.stdout
     assert first.stdout.splitlines()[-2:] == [
-        "bootstrap: uninstall=sat-uninstall",
+        "bootstrap: uninstall=sat uninstall",
         "bootstrap: next=sat",
     ]
     assert not tuple(install_root.parent.glob(".sat-bootstrap.*"))

@@ -316,7 +316,7 @@ if [[ "$task_install_stage_only" == "1" ]]; then
   echo "install: staged application verified; active launchers were not changed"
 fi
 if [[ "$task_managed_install" != "1" ]]; then
-  echo "install: uninstall=sat-uninstall"
+  echo "install: uninstall=sat uninstall"
   case ":$PATH:" in
     *":$task_bin_dir:"*) echo "install: next=sat" ;;
     *)

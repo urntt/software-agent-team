@@ -117,7 +117,12 @@ Before execution, SAT shows one editable overview that begins with target
 users, the killer workflow, delivery maturity, quality expectations, non-goals,
 and their architecture, team, cost, and delivery effects, then shows detailed
 requirements, implementation intent, task-defined Agents, dependencies,
-permissions, budgets, and model routes. Fixed Controller policy remains
+permissions, budgets, and model routes. Planning and execution share a persistent
+editable control area with phase-appropriate commands, hints, and completion.
+Visibility applies to the whole journey: compact retains the readable checkpoint
+view, standard adds task-wide telemetry and work milestones, and detailed adds
+bounded visible tool and model previews without granting them authority.
+Fixed Controller policy remains
 available through a lossless display toggle instead of dominating the default
 task-specific view. After approval, the controller validates
 and creates the run-scoped team. During execution, SAT shows configurable run-level and
@@ -153,7 +158,8 @@ current implementation and evidence.
 - Stable installs resolve published releases; dev follows an explicitly chosen
   channel or revision. SemVer, complete source revision, artifact digest, and
   managed provenance remain distinct. Install, update, rollback, and uninstall
-  use one ownership-bound lifecycle. See [releases](docs/releases.md) and
+  use one ownership-bound lifecycle; `sat uninstall` is the canonical removal
+  command. See [releases](docs/releases.md) and
   [installation](docs/installation.md).
 
 ### Control Plane
@@ -205,6 +211,7 @@ Each concept has one authoritative owner.
 | Guided product-journey interaction and acceptance specification | `docs/product-demo-slice.md` |
 | Adaptive Planning, task-defined teams, progress visibility, user controls, and model-routing acceptance design | `docs/adaptive-orchestration.md` |
 | Installation, saved configuration, export, and removal behavior | `docs/installation.md` |
+| Terminal display, telemetry limits, keyboard editing, and phase controls | `docs/terminal-interface.md` |
 | Runtime, response, persisted-evidence, integrity, and operator-safety reference | `docs/runtime-evidence.md` |
 | Controlled Phase 1 provider-backed evaluation procedure | `docs/phase1-runbook.md` |
 | Development workflow and repository reference | `docs/development.md` |

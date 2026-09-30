@@ -257,6 +257,44 @@ def run_uninstaller(
     )
 
 
+def test_canonical_cli_exports_and_uninstalls_through_same_owned_lifecycle(
+    tmp_path: Path,
+) -> None:
+    checkout, install_bin, configuration, environment = prepare_installation(tmp_path)
+    package = checkout / "src/software_agent_team"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    for name in ("entrypoint.py", "uninstall_command.py"):
+        shutil.copy2(REPOSITORY_ROOT / "src/software_agent_team" / name, package / name)
+    exported = tmp_path / "export"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from software_agent_team.entrypoint import main; "
+            "raise SystemExit(main(['uninstall', *sys.argv[2:]]))",
+            str(checkout / "src"),
+            "--export-to",
+            str(exported),
+            "--yes",
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert exported.is_dir()
+    assert configuration.is_file()
+    assert not (checkout / ".venv").exists()
+    assert not (checkout / ".sat/openclaw").exists()
+    assert not (install_bin / "sat").exists()
+    assert not (install_bin / "sat-uninstall").exists()
+    assert checkout.is_dir()
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="uninstaller supports Linux/WSL")
 def test_uninstaller_preserves_configuration_and_generated_data_by_default(
     tmp_path: Path,

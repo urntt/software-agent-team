@@ -44,7 +44,8 @@ bash -o pipefail -c 'curl -fsSL \
 The installer validates the device, installs SAT's pinned private runtime,
 prepares its Python environment and Docker image, proves that the restricted
 sandbox container stays runnable and can execute a tool helper, runs offline
-checks, and adds `sat` and `sat-uninstall` to the user-local command path. A
+checks, and adds `sat` to the user-local command path (`sat uninstall` removes
+the installation). A
 normal installation downloads the latest published release's bootstrap asset.
 That shell entry point pins its helper to the same release tag and full source
 revision, then verifies the selected application's release identity and source
@@ -112,9 +113,11 @@ While execution is active, the same terminal accepts optional slash commands:
 /help
 ```
 
-Type `/` to open the editable control prompt; a command is submitted only when
-you press Enter. Progress notices wait while you edit. If the run ends before
-submission, the unfinished command is cancelled and the terminal is restored.
+The control prompt remains visible beside progress. Type `/` for commands and
+Tab for completion; Enter submits. Planning also supports `/help`, `/status`,
+`/visibility`, and `/cancel confirm`. An unfinished command is discarded when
+the run ends. See the [terminal guide](docs/terminal-interface.md) for display
+levels, telemetry limits, editing, and phase-appropriate controls.
 
 Guidance applies only to a future invocation. Correction stops at a safe
 checkpoint, preserves the superseded run, and opens a new Planning overview for
@@ -142,8 +145,8 @@ when the default live display is active.
 
 Natural-language prompts support cursor movement, Home/End, Delete, Unicode,
 soft wrapping, and multiline editing. Enter submits the complete buffer;
-Alt+Enter or Ctrl+O inserts a newline, and Ctrl+C cancels at the existing flow
-boundary.
+Alt+Enter or Ctrl+O inserts a newline. During Planning and execution, Ctrl+C
+clears the editor; `/cancel confirm` stops the phase.
 
 ## Configure a Model
 
@@ -242,7 +245,7 @@ clean before updating it.
 Run the guided uninstaller from any directory:
 
 ```bash
-sat-uninstall
+sat uninstall
 ```
 
 Uninstallation preserves configuration, Planning evidence, generated work, and

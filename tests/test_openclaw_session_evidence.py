@@ -1702,6 +1702,44 @@ def test_capture_distinguishes_a_turn_ending_after_a_paired_tool_result(
     assert captured.terminal_state is OpenClawInvocationTerminalState.TOOL_RESULT
 
 
+@pytest.mark.parametrize("backend", [write_session_state, write_sqlite_session_state])
+def test_ephemeral_preview_uses_real_current_session_adapter_and_preserves_safe_default(
+    tmp_path: Path, backend
+) -> None:
+    invocation = request()
+    final = assistant_record("Visible final text")
+    final["message"].update(
+        provider="provider", model="model", usage={"input": 40, "cacheRead": 10}
+    )
+    records = [
+        session_record(),
+        user_record(invocation.prompt),
+        tool_call_record("call", command="python app.py --api-key=sk-fixturekey"),
+        tool_result_record("call", output="result\npassword=private"),
+        final,
+    ]
+    backend(tmp_path, invocation=invocation, records=records)
+    arguments = dict(
+        state_dir=tmp_path,
+        agent_id=invocation.agent_id,
+        session_key=invocation.session_key,
+        prompt=invocation.prompt,
+    )
+    safe = inspect_openclaw_session_activity(**arguments)
+    assert safe.presentation is None
+    assert safe.started_tools[0].presentation is None
+    visible = inspect_openclaw_session_activity(
+        **arguments, include_presentation=True, model=invocation.model
+    )
+    assert visible.presentation.context_input_tokens == 50
+    assert visible.presentation.model_text == "Visible final text"
+    assert (
+        visible.completed_tools[0].presentation.arguments
+        == "python app.py --api-key=[redacted]"
+    )
+    assert "password=[redacted]" in visible.completed_tools[0].presentation.result
+
+
 def test_activity_inspection_tracks_current_tool_lifecycle_without_content(
     tmp_path: Path,
 ) -> None:

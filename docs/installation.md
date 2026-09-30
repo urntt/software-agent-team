@@ -601,7 +601,7 @@ otherwise it fails closed on the current route. `--clear-model-routing`
 returns configuration to one strict default profile.
 
 Set an absolute `SAT_CONFIG_PATH` only when the configuration location must be
-overridden. Keep the same value set for later `sat` and `sat-uninstall`
+overridden. Keep the same value set for later `sat` and `sat uninstall`
 commands.
 
 ## Product State and Delivery
@@ -687,7 +687,7 @@ engine snapshot; the first normal command verifies it and atomically upgrades
 the legacy record. `sat --version` stays read-only and does not perform that
 migration. If the recorded daemon has been replaced, SAT refuses Docker work
 rather than silently adopting the new one. Preserve configuration and data with
-`sat-uninstall`, then install against the intended daemon to establish a new
+`sat uninstall`, then install against the intended daemon to establish a new
 binding.
 
 Switching channels is separate and always explicit:
@@ -771,10 +771,14 @@ For a contributor checkout, follow the update workflow in
 
 ## Guided Uninstallation
 
+`sat uninstall` is the canonical command. The existing `sat-uninstall` launcher
+remains a compatibility alias to the same ownership-bound script until SAT 1.0;
+it will be removed in that major release. It has no separate removal logic.
+
 Run from any directory:
 
 ```bash
-sat-uninstall
+sat uninstall
 ```
 
 The default removes SAT launchers and the complete marked managed application,
@@ -797,7 +801,7 @@ install/update. By default it preserves:
 Export configuration and generated state first with:
 
 ```bash
-sat-uninstall --export-to "$HOME/sat-backup" --yes
+sat uninstall --export-to "$HOME/sat-backup" --yes
 ```
 
 The new absolute destination must not already exist and must be outside the
@@ -809,7 +813,7 @@ credentials and ephemeral process leases remain excluded.
 Deletion requires explicit purge flags and may follow the same export:
 
 ```bash
-sat-uninstall \
+sat uninstall \
   --export-to "$HOME/sat-backup" \
   --purge-config \
   --purge-data \
@@ -820,14 +824,14 @@ SAT's isolated provider state has its own choice because it contains secrets
 and is intentionally excluded from export:
 
 ```bash
-sat-uninstall --purge-provider-state --yes
+sat uninstall --purge-provider-state --yes
 ```
 
 That flag can delete only the `openclaw/` child of a validated SAT-owned state
 root. It cannot select or delete `~/.openclaw`, a named OpenClaw profile, or
 another installation.
 
-Without a terminal, `--yes` is required. Use `sat-uninstall --help` to review
+Without a terminal, `--yes` is required. Use `sat uninstall --help` to review
 all keep, purge, export, and confirmation options. `make uninstall` invokes the
 same script from a contributor checkout.
 

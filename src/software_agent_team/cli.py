@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import warnings
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
@@ -52,7 +53,11 @@ from software_agent_team.dynamic_workflow import (
     DynamicWorkflowOutcome,
 )
 from software_agent_team.execution import OpenClawSubprocessExecutor
-from software_agent_team.git_workspace import GitWorkspace, GitWorkspaceManager
+from software_agent_team.git_workspace import (
+    GitWorkspace,
+    GitWorkspaceError,
+    GitWorkspaceManager,
+)
 from software_agent_team.managed_install import (
     MANAGED_MARKER_NAME,
     ManagedInstallError,
@@ -178,6 +183,7 @@ from software_agent_team.teams import (
     load_team_manifest,
 )
 from software_agent_team.terminal_input import DEFAULT_TERMINAL_INPUT
+from software_agent_team.terminal_metrics import TerminalRunMetrics
 from software_agent_team.updates import (
     ForegroundUpdateObservation,
     ManagedChangePlan,
@@ -3425,6 +3431,8 @@ def _run_product_planning(
     configuration: UserConfiguration,
     resource_authorization: TaskResourceAuthorization,
     budget_ledger: AgentBudgetLedger,
+    terminal_metrics: TerminalRunMetrics | None = None,
+    visibility_handler: Callable[[str], None] | None = None,
 ) -> ApprovedPlanningResult | None:
     """Run one isolated bootstrap Planning session and clean its sandbox."""
 
@@ -3604,6 +3612,8 @@ def _run_product_planning(
                 progress_visibility=configuration.progress_visibility,
                 progress_display=configuration.progress_display,
                 progress_color=configuration.progress_color,
+                metrics=terminal_metrics,
+                visibility_handler=visibility_handler,
             )
         except BaseException as error:
             try:
@@ -3864,6 +3874,8 @@ def _run_product(
 ) -> int:
     """Run the primary diagnostics-to-delivery product journey."""
 
+    product_started_monotonic = time.monotonic()
+
     if not sys.stdin.isatty():
         raise ValueError(
             "the guided product flow requires an interactive terminal; "
@@ -3995,10 +4007,19 @@ def _run_product(
         )
     )
 
+    terminal_metrics = TerminalRunMetrics(
+        ledger=budget_ledger,
+        started_monotonic=product_started_monotonic,
+        model_windows={
+            profile.model: profile.context_window_tokens
+            for profile in configuration.model_profiles
+        },
+    )
     renderer = TerminalProgressRenderer(
         visibility=RunEventVisibility(configuration.progress_visibility),
         display=TerminalProgressDisplay(configuration.progress_display),
         color=TerminalColorMode(configuration.progress_color),
+        metrics=terminal_metrics,
     )
     try:
         while True:
@@ -4010,6 +4031,8 @@ def _run_product(
                 configuration=configuration,
                 resource_authorization=resource_authorization,
                 budget_ledger=budget_ledger,
+                terminal_metrics=terminal_metrics,
+                visibility_handler=renderer.set_visibility,
             )
             if approved is None:
                 return 0
@@ -4050,22 +4073,40 @@ def _run_product(
             def start_controls(
                 store: ControlCommandStore,
                 team_plan: TeamPlan,
+                *,
+                source: Path = source_repository,
+                current_run_id: str = run_id,
             ) -> Callable[[], None]:
                 console = TerminalControlConsole(
                     store=store,
                     team_plan=team_plan,
                     notice_handler=renderer.write_notice,
                     visibility_handler=renderer.set_visibility,
-                    input_activity_handler=(
-                        lambda active: (
-                            renderer.suspend_live()
-                            if active
-                            else renderer.resume_live()
-                        )
-                    ),
+                    live_lines=renderer.live_lines,
+                    detail_lines=renderer.detail_lines,
+                    color=renderer.color_enabled,
                 )
                 console.start()
-                return console.close
+                renderer.attach_dashboard(console.dashboard)
+                if console.dashboard is not None:
+                    manager = GitWorkspaceManager(state_paths.workspaces)
+                    try:
+                        base_commit = manager.validate_source_repository(source)
+                    except (GitWorkspaceError, OSError):
+                        # Optional display telemetry cannot change the run outcome.
+                        pass
+                    else:
+                        terminal_metrics.watch_git(
+                            state_paths.workspaces / current_run_id,
+                            base_commit=base_commit,
+                        )
+
+                def close_controls() -> None:
+                    console.close()
+                    terminal_metrics.stop_git()
+                    renderer.attach_dashboard(None)
+
+                return close_controls
 
             outcome = _execute_dynamic_workflow(
                 approved,
@@ -4190,6 +4231,7 @@ def _run_product(
                 )
     finally:
         renderer.close()
+        terminal_metrics.stop_git()
 
     if outcome.record.phase is not RunPhase.COMPLETED:
         _render_product_outcome(
@@ -4268,6 +4310,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override automatic, preferred, or disabled color for this run only.",
     )
     commands = parser.add_subparsers(dest="command")
+
+    commands.add_parser(
+        "uninstall",
+        help="Remove the owned installation; preserve saved data by default.",
+        add_help=False,
+        description="Use sat uninstall --help for lifecycle options.",
+    )
 
     version = commands.add_parser(
         "version",
@@ -4856,7 +4905,12 @@ def _dispatch_main(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one CLI command and return a process exit code."""
 
-    args = build_parser().parse_args(argv)
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ("uninstall",):
+        from software_agent_team.uninstall_command import uninstall
+
+        return uninstall(arguments[1:])
+    args = build_parser().parse_args(arguments)
     try:
         identity = _managed_engine_binding(args)
         with bound_docker_engine(

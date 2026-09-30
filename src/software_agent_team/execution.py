@@ -99,6 +99,11 @@ from software_agent_team.teams import (
     expected_output_for_specialization,
     specialization_contract,
 )
+from software_agent_team.terminal_presentation import (
+    InvocationPresentation,
+    display_text,
+    stream_preview,
+)
 
 DEFAULT_PROCESS_SHUTDOWN_GRACE_SECONDS = 35
 DEFAULT_INITIALIZATION_NO_PROGRESS_SECONDS = 90.0
@@ -111,7 +116,7 @@ DEFAULT_CLOUD_PROVIDER_SILENCE_SECONDS = 120.0
 DEFAULT_LOCAL_PROVIDER_SILENCE_SECONDS = 300.0
 DEFAULT_PROVIDER_STALL_GRACE_SECONDS = 30.0
 DEFAULT_LIVENESS_POLL_SECONDS = 0.25
-PROVIDER_ACTIVITY_REPORT_SECONDS = 10.0
+PROVIDER_ACTIVITY_REPORT_SECONDS = 1.0
 COMPACTION_LINEAGE_RECHECK_SECONDS = 3.0
 COMPACTION_LINEAGE_ERROR = "OpenClaw compaction lineage is invalid"
 
@@ -397,7 +402,7 @@ def resolve_provider_liveness_policy(
 
 
 class AgentExecutionActivity(BaseModel):
-    """Safe controller observation; never contains provider or tool content."""
+    """Controller observation with an optional ephemeral terminal preview."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -425,6 +430,7 @@ class AgentExecutionActivity(BaseModel):
         default=None,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
     )
+    presentation: InvocationPresentation | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def bind_degradation_reason(self) -> Self:
@@ -1455,8 +1461,10 @@ def _decode_process_output(value: str | bytes | None) -> str:
     return value
 
 
-def _consume_private_raw_stream(path: Path) -> bool:
-    """Observe and discard a private raw-stream batch without reading content."""
+def _consume_private_raw_stream(
+    path: Path, *, preview: bytearray | None = None
+) -> bool:
+    """Observe and discard a batch, optionally collecting a bounded live preview."""
 
     flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
@@ -1468,6 +1476,8 @@ def _consume_private_raw_stream(path: Path) -> bool:
             raise OSError("raw stream owner changed")
         if metadata.st_size == 0:
             return False
+        if preview is not None:
+            preview.extend(os.read(descriptor, min(metadata.st_size, 256 * 1024)))
         os.ftruncate(descriptor, 0)
         return True
     finally:
@@ -2190,6 +2200,9 @@ class _ProviderLivenessMonitor:
         self.terminal_response_observed = False
         self.degradation_reason: str | None = None
         self.compaction_lineage_error_since: float | None = None
+        self.presentation: InvocationPresentation | None = None
+        self._stream_session_id: str | None = None
+        self._stream_text = ""
 
     def poll(self, now: float, *, enforce_stall: bool = True) -> bool:
         """Observe activity and optionally enforce the live silence boundary."""
@@ -2201,8 +2214,12 @@ class _ProviderLivenessMonitor:
                 round(inactivity_before_poll * 1000),
             )
         trusted_activity = False
+        stream_batch = bytearray()
         try:
-            raw_activity = _consume_private_raw_stream(self.raw_stream_path)
+            raw_activity = _consume_private_raw_stream(
+                self.raw_stream_path,
+                preview=stream_batch if self.activity_handler is not None else None,
+            )
         except OSError:
             self._degrade("private provider-stream observer became unavailable", now)
             raw_activity = False
@@ -2217,6 +2234,8 @@ class _ProviderLivenessMonitor:
                 session_key=self.request.session_key,
                 prompt=self.request.prompt,
                 baseline=self.initialization_monitor.baseline,
+                include_presentation=self.activity_handler is not None,
+                model=self.request.model,
             )
         except OpenClawSessionEvidenceError as error:
             # This adapter's errors contain only controller-owned labels, never
@@ -2235,6 +2254,28 @@ class _ProviderLivenessMonitor:
                 )
             session = None
         if session is not None:
+            self.presentation = session.presentation
+            if (
+                self.presentation is not None
+                and self.presentation.session_id is not None
+            ):
+                if self._stream_session_id != self.presentation.session_id:
+                    self._stream_session_id = self.presentation.session_id
+                    self._stream_text = ""
+                self._stream_text = stream_preview(
+                    bytes(stream_batch),
+                    session_id=self.presentation.session_id,
+                    previous=self._stream_text,
+                )
+                if self._stream_text and not session.terminal_response_observed:
+                    self.presentation = self.presentation.model_copy(
+                        update={
+                            "model_text": display_text(
+                                self._stream_text, limit=1000, tail=True
+                            ),
+                            "streaming": True,
+                        }
+                    )
             self.compaction_lineage_error_since = None
             first_session_observation = not self.session_observed
             self.session_observed = True
@@ -2434,6 +2475,13 @@ class _ProviderLivenessMonitor:
             ),
             tool_detail=(
                 None if tool_classification is None else tool_classification[2]
+            ),
+            presentation=(
+                self.presentation.model_copy(
+                    update={"tool": tool_activity.presentation}
+                )
+                if self.presentation is not None and tool_activity is not None
+                else self.presentation
             ),
         )
         if not self.lifecycle._emit(activity):

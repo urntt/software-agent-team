@@ -472,38 +472,29 @@ def test_console_rejects_unknown_agents_and_non_control_input(tmp_path: Path) ->
         )
 
 
-def test_tty_control_entry_suspends_live_rendering_while_editing(
-    tmp_path: Path,
-) -> None:
-    store, _, _ = _channel(tmp_path)
-    master, slave = pty.openpty()
-    input_stream = os.fdopen(slave, "r", encoding="utf-8", buffering=1)
-    input_activity: list[bool] = []
-    notices: list[str] = []
-    console = TerminalControlConsole(
-        store=store,
-        team_plan=_plan(),
-        input_stream=input_stream,
-        notice_handler=notices.append,
-        input_activity_handler=input_activity.append,
-        line_reader=lambda initial: initial + input_stream.readline().strip(),
-        poll_seconds=0.01,
-    )
-    try:
-        console.start()
-        os.write(master, b"/pause\n")
-        deadline = time.monotonic() + 2
-        while not store.list_latest():
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-    finally:
-        console.close()
-        input_stream.close()
-        os.close(master)
+def test_command_completion_includes_targets_and_visibility() -> None:
+    from prompt_toolkit.completion import CompleteEvent
+    from prompt_toolkit.document import Document
 
-    assert input_activity == [True, False]
-    assert store.list_latest()[0].command is ControlCommandType.PAUSE
-    assert any("Queued pause" in notice for notice in notices)
+    from software_agent_team.control_console import ControlCompleter
+
+    completer = ControlCompleter(agents=("builder", "security_reviewer"))
+
+    def choices(text):
+        return [
+            item.text
+            for item in completer.get_completions(Document(text), CompleteEvent())
+        ]
+
+    assert choices("/vis") == ["/visibility"]
+    assert choices("/visibility st") == ["standard"]
+    assert choices("/interrupt sec") == ["security_reviewer"]
+    assert choices("plain answer") == []
+    planning = ControlCompleter(planning=True)
+    names = [
+        item.text for item in planning.get_completions(Document("/"), CompleteEvent())
+    ]
+    assert "/status" in names and "/pause" not in names
 
 
 def test_redirected_output_keeps_tty_input_in_canonical_line_mode(
@@ -546,6 +537,7 @@ import sys
 import termios
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from software_agent_team.control_console import TerminalControlConsole
 from software_agent_team.controls import ControlCommandStore
 from software_agent_team.progress import TerminalProgressRenderer
@@ -560,19 +552,14 @@ renderer = TerminalProgressRenderer(
     environment={"TERM": "xterm-256color"},
 )
 
-def activity(active):
-    if active:
-        renderer.suspend_live()
-    else:
-        renderer.resume_live()
-    print("INPUT_ACTIVE=" + str(active), flush=True)
-
 console = TerminalControlConsole(
-    store=store, team_plan=object(), notice_handler=renderer.write_notice,
-    input_activity_handler=activity, poll_seconds=0.01,
+    store=store, team_plan=SimpleNamespace(agents=()),
+    notice_handler=renderer.write_notice,
+    live_lines=lambda: ["AGENT ACTIVE AND REFRESHING"], poll_seconds=0.01,
 )
 console.start()
-print("READY", flush=True)
+renderer.attach_dashboard(console.dashboard)
+renderer.write_notice("READY")
 reported = set()
 while not flags["stop"]:
     if flags["milestone"]:
@@ -581,9 +568,10 @@ while not flags["stop"]:
     for command in store.list_latest():
         if command.command_id not in reported:
             reported.add(command.command_id)
-            print("QUEUED=" + str(command.instruction), flush=True)
+            renderer.write_notice("QUEUED=" + str(command.instruction))
     time.sleep(0.01)
 console.close()
+renderer.attach_dashboard(None)
 renderer.close()
 print(
     "CLOSED thread_alive=" + str(console._thread.is_alive())
@@ -613,16 +601,19 @@ print(
 
     try:
         read_until(b"READY")
-        os.write(master, b"/correct half")
-        read_until(b"INPUT_ACTIVE=True")
+        os.write(master, b"abc\x1b[D\x1b[C\x1b[A\x1b[B")
+        time.sleep(0.1)
+        os.write(master, b"\x03/correct half")
+        read_until(b"half")
+        read_until(b"AGENT ACTIVE AND REFRESHING")
         os.kill(process.pid, signal.SIGUSR1)
         time.sleep(0.15)
         ready, _, _ = select.select([master], [], [], 0)
         if ready:
             captured.extend(os.read(master, 65_536))
-        assert b"MILESTONE DURING INPUT" not in captured
+        read_until(b"MILESTONE DURING INPUT")
         assert b"QUEUED=" not in captured
-        os.write(master, b" written")
+        os.write(master, b" written\x1b[DX\x7f\x1b[C")
         time.sleep(0.1)
         ready, _, _ = select.select([master], [], [], 0)
         if ready:
@@ -633,15 +624,11 @@ print(
         assert b"MILESTONE DURING INPUT" in captured
 
         os.write(master, b"/correct unfinished")
-        deadline = time.monotonic() + 6
-        while captured.count(b"INPUT_ACTIVE=True") < 2 and time.monotonic() < deadline:
-            ready, _, _ = select.select([master], [], [], 0.05)
-            if ready:
-                captured.extend(os.read(master, 65_536))
-        assert captured.count(b"INPUT_ACTIVE=True") == 2
+        time.sleep(0.15)
         os.kill(process.pid, signal.SIGUSR2)
         read_until(b"CLOSED thread_alive=False terminal_restored=True")
         assert b"QUEUED=unfinished" not in captured
+        assert b"Run controls begin" not in captured
         assert process.wait(timeout=2) == 0
     finally:
         if process.poll() is None:

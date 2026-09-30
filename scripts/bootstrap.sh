@@ -120,5 +120,5 @@ fi
 
 echo "bootstrap: managed application=$task_install_root"
 echo "bootstrap: channel=$task_channel"
-echo "bootstrap: uninstall=sat-uninstall"
+echo "bootstrap: uninstall=sat uninstall"
 echo "bootstrap: next=sat"

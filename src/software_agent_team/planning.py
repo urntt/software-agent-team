@@ -11,6 +11,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable, Collection, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -160,6 +161,9 @@ from software_agent_team.teams import (
     specialization_contract,
     workspace_scopes_overlap,
 )
+from software_agent_team.terminal_dashboard import TerminalDashboard
+from software_agent_team.terminal_metrics import TerminalRunMetrics
+from software_agent_team.terminal_presentation import InvocationPresentation
 
 PLANNING_SCHEMA_VERSION = 23
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
@@ -577,6 +581,7 @@ class PlanningActivity:
     clarification_dimension: ProductDefinitionDimension | None = None
     clarification_category: PlanningDecisionCategory | None = None
     correction_reasons: tuple[str, ...] = ()
+    presentation: InvocationPresentation | None = None
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
@@ -611,6 +616,7 @@ class TerminalPlanningProgress:
         environment: Mapping[str, str] | None = None,
         is_terminal: bool | None = None,
         terminal_width: Callable[[], int] | None = None,
+        metrics: TerminalRunMetrics | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("Planning heartbeat must be positive")
@@ -630,6 +636,8 @@ class TerminalPlanningProgress:
         self.monotonic = monotonic
         self.environment = os.environ if environment is None else environment
         self.terminal_width = terminal_width
+        self.metrics = metrics
+        self._presentation: InvocationPresentation | None = None
         self.live_enabled = bool(
             self.output is not None
             and self.display is not TerminalProgressDisplay.LOG
@@ -652,8 +660,13 @@ class TerminalPlanningProgress:
         self._lock = threading.Lock()
         self._waiting: _PlanningProgressObservation | None = None
         self._live_line_count = 0
+        self._dashboard: TerminalDashboard | None = None
 
     def __call__(self, activity: PlanningActivity) -> None:
+        if activity.presentation is not None:
+            self._presentation = activity.presentation
+            if self.metrics is not None:
+                self.metrics.observe("planner", activity.model, activity.presentation)
         if activity.kind is PlanningActivityKind.WAITING_MODEL:
             attempt_label = (
                 str(activity.attempt)
@@ -1053,13 +1066,82 @@ class TerminalPlanningProgress:
 
     def _print(self, value: str) -> None:
         with self._lock:
+            if self._dashboard is not None:
+                self._dashboard.write(self._colorize(value, self._line_color(value)))
+                self._dashboard.invalidate()
+                return
             self._clear_live_locked()
             self.write(self._colorize(value, self._line_color(value)))
             self._draw_live_locked()
 
     def _draw_live_locked(self) -> None:
-        if not self.live_enabled or self._waiting is None:
+        if self._dashboard is not None:
+            self._dashboard.invalidate()
             return
+        self._write_live_lines_locked()
+
+    def attach_dashboard(self, dashboard: TerminalDashboard | None) -> None:
+        with self._lock:
+            self._clear_live_locked()
+            self._dashboard = dashboard
+
+    def live_lines(self) -> list[str]:
+        with self._lock:
+            return self._live_lines_locked()
+
+    def detail_lines(self) -> list[str]:
+        with self._lock:
+            return self._presentation_lines_locked()
+
+    def _presentation_lines_locked(self) -> list[str]:
+        if (
+            not self.live_enabled
+            or self.visibility is not RunEventVisibility.DETAILED
+            or self._presentation is None
+        ):
+            return []
+        detail = self._presentation
+        lines = ["Planning details"]
+        if detail.tool is not None:
+            lines.append("Tool / command: " + detail.tool.label)
+            lines.extend("  " + line for line in detail.tool.arguments.splitlines()[:1])
+            lines.append("Result / output:")
+            lines.extend(
+                "  " + line
+                for line in detail.tool.result.splitlines()[:1]
+                or [
+                    "completed; no text output"
+                    if detail.tool.completed
+                    else "waiting for the tool result"
+                ]
+            )
+        lines.append("Model " + ("stream:" if detail.streaming else "output:"))
+        lines.extend(
+            "  " + line
+            for line in detail.model_text.splitlines()[:2]
+            or ["no visible text reported"]
+        )
+        return [self._fit(line, self._terminal_columns()) for line in lines]
+
+    def _write_live_lines_locked(self) -> None:
+        lines = self._live_lines_locked()
+        if self.output is None:
+            return
+        for line in lines:
+            self.output.write(line + "\n")
+        self.output.flush()
+        self._live_line_count = len(lines)
+
+    def _live_lines_locked(self) -> list[str]:
+        if not self.live_enabled:
+            return []
+        if self._waiting is None:
+            return (
+                self.metrics()
+                if self.metrics is not None
+                and self.visibility is not RunEventVisibility.COMPACT
+                else []
+            )
         assert self.output is not None
         observation = self._waiting
         elapsed = max(0, int(self.monotonic() - observation.started))
@@ -1096,10 +1178,16 @@ class TerminalPlanningProgress:
                 "2",
             ),
         ]
-        for line in lines:
-            self.output.write(line + "\n")
-        self.output.flush()
-        self._live_line_count = len(lines)
+        if (
+            self.visibility is not RunEventVisibility.COMPACT
+            and self.metrics is not None
+        ):
+            lines = [*self.metrics(), *lines]
+        if self._dashboard is None:
+            lines.extend(self._presentation_lines_locked())
+        return [
+            self._fit(line, width) if "\x1b" not in line else line for line in lines
+        ]
 
     def _clear_live_locked(self) -> None:
         if not self.live_enabled or self._live_line_count == 0:
@@ -9674,12 +9762,12 @@ def render_planning_overview(
 ) -> str:
     """Render task authority, with lossless fixed-policy details on request."""
 
-    if visibility != "detailed":
+    if visibility == "compact":
         return _render_concise_planning_overview(
             preview,
             budget_usage=budget_usage,
             include_fixed_policy=include_fixed_policy,
-            visibility=visibility,
+            visibility="standard",
             color=color,
         )
 
@@ -11996,6 +12084,7 @@ class AdaptivePlanningCoordinator:
                 tool_action_class=activity.tool_action_class,
                 tool_target_class=activity.tool_target_class,
                 tool_detail=activity.tool_detail,
+                presentation=activity.presentation,
             ),
         )
 
@@ -12234,7 +12323,10 @@ def _interactive_question_answerer(
     read: InputReader,
     write: OutputWriter,
     read_text: InputReader | None = None,
+    color: bool = False,
+    visibility: RunEventVisibility | str = RunEventVisibility.DETAILED,
 ) -> QuestionAnswerer:
+    detailed = RunEventVisibility(visibility) is RunEventVisibility.DETAILED
     natural_text_reader = read if read_text is None else read_text
     dimension_prompts = {
         ProductDefinitionDimension.TARGET_USERS: (
@@ -12271,17 +12363,27 @@ def _interactive_question_answerer(
             )
         )
         write("")
-        write("Planning clarification")
+        write(
+            "\x1b[1;36mPlanning clarification\x1b[0m"
+            if color
+            else "Planning clarification"
+        )
+        write("  " + "─" * 58 if color else "  " + "-" * 58)
         assert question.decision_category is not None
         assert question.decision_owner is not None
         write(
             "Decision boundary: "
-            f"{question.decision_category.value} / {question.decision_owner.value}"
+            + (
+                f"{question.decision_category.value} / {question.decision_owner.value}"
+                if detailed
+                else question.decision_category.value.replace("_", " ")
+                + " / your choice"
+            )
         )
         if question.product_definition_dimensions:
             decision_scope = (
                 ""
-                if admission.controller_decision_id is None
+                if admission.controller_decision_id is None or not detailed
                 else (
                     f"{question.decision_category.value} / "
                     f"{admission.controller_decision_id}; product definition: "
@@ -12291,11 +12393,11 @@ def _interactive_question_answerer(
                 "Decision scope: "
                 + decision_scope
                 + ", ".join(
-                    dimension.value
+                    dimension.value if detailed else dimension.value.replace("_", " ")
                     for dimension in question.product_definition_dimensions
                 )
             )
-        elif admission.controller_decision_id is not None:
+        elif admission.controller_decision_id is not None and detailed:
             write(
                 "Decision scope: "
                 f"{question.decision_category.value} / "
@@ -12306,10 +12408,11 @@ def _interactive_question_answerer(
                 "Question source: Controller validation requires this user-owned "
                 "decision before the plan can be approved."
             )
-            write(
-                "Controller invariants: "
-                + ", ".join(admission.controller_invariant_ids)
-            )
+            if detailed:
+                write(
+                    "Controller invariants: "
+                    + ", ".join(admission.controller_invariant_ids)
+                )
         else:
             write(
                 "Question source: Planner-selected clarification for this task; "
@@ -12327,6 +12430,7 @@ def _interactive_question_answerer(
                     "the product fields listed in Decision scope."
                 )
         else:
+            write("")
             write(f"Planning question: {question.text}")
             write(f"Planner reason: {question.why}")
             write("Missing evidence:")
@@ -12335,15 +12439,22 @@ def _interactive_question_answerer(
             write("What this can change:")
             for item in question.material_consequences:
                 write(f"  - {item}")
+        write("")
         for index, option in enumerate(question.options, start=1):
+
+            def option_write(value: str) -> None:
+                for line in _render_prefixed_text("", value):
+                    write(f"\x1b[36m{line}\x1b[0m" if color else line)
+
             if question.product_definition_dimensions:
                 values = "; ".join(
                     f"{item.dimension.value}: {item.value}"
                     for item in option.product_definition_values
                 )
-                write(f"  {index}. {values}")
+                option_write(f"  {index}. {values}")
             else:
-                write(f"  {index}. {option.label} — {option.description}")
+                option_write(f"  {index}. {option.label} — {option.description}")
+            write("")
         if question.product_definition_dimensions:
             write("  d. Show Planner wording and suggestion notes (advisory only)")
         write("  c. Custom answer")
@@ -12496,16 +12607,52 @@ def run_interactive_planning(
     progress_color: TerminalColorMode | str = TerminalColorMode.AUTO,
     environment: Mapping[str, str] | None = None,
     is_terminal: bool | None = None,
+    metrics: TerminalRunMetrics | None = None,
+    visibility_handler: Callable[[str], None] | None = None,
+) -> ApprovedPlanningResult | None:
+    """Run Planning with one terminal owner and phase-appropriate commands."""
+
+    from software_agent_team.planning_terminal import run_interactive_planning as run
+
+    return run(
+        coordinator,
+        request,
+        read=read,
+        read_text=read_text,
+        write=write,
+        output=output,
+        progress_visibility=progress_visibility,
+        progress_display=progress_display,
+        progress_color=progress_color,
+        environment=environment,
+        is_terminal=is_terminal,
+        metrics=metrics,
+        visibility_handler=visibility_handler,
+    )
+
+
+def _run_interactive_planning(
+    coordinator: AdaptivePlanningCoordinator,
+    request: PlanningRequest,
+    *,
+    read: InputReader = input,
+    read_text: InputReader | None = None,
+    write: OutputWriter = print,
+    output: TextIO | None = None,
+    progress_visibility: RunEventVisibility | str = RunEventVisibility.STANDARD,
+    progress_display: TerminalProgressDisplay | str = TerminalProgressDisplay.AUTO,
+    progress_color: TerminalColorMode | str = TerminalColorMode.AUTO,
+    environment: Mapping[str, str] | None = None,
+    is_terminal: bool | None = None,
+    progress: TerminalPlanningProgress | None = None,
+    activity_handler: PlanningActivityHandler | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
+    approval_guard: AbstractContextManager | None = None,
 ) -> ApprovedPlanningResult | None:
     """Run the user-facing clarification, overview, revision, and approval loop."""
 
     natural_text_reader = read if read_text is None else read_text
-    answer_question = _interactive_question_answerer(
-        read=read,
-        read_text=natural_text_reader,
-        write=write,
-    )
-    progress = TerminalPlanningProgress(
+    progress = progress or TerminalPlanningProgress(
         write=write,
         output=output,
         visibility=progress_visibility,
@@ -12514,13 +12661,20 @@ def run_interactive_planning(
         environment=environment,
         is_terminal=is_terminal,
     )
+    answer_question = _interactive_question_answerer(
+        read=read,
+        read_text=natural_text_reader,
+        write=write,
+        color=progress.color_enabled,
+        visibility=progress.visibility,
+    )
     write("")
     write("Planning started. No runtime Agent has been created yet.")
     try:
         proposal = coordinator.start(
             request,
             answer_question=answer_question,
-            activity_handler=progress,
+            activity_handler=activity_handler or progress,
         )
     finally:
         progress.close()
@@ -12529,7 +12683,7 @@ def run_interactive_planning(
         return None
 
     show_fixed_policy = False
-    show_technical_details = progress.visibility is RunEventVisibility.DETAILED
+    show_technical_details = progress.visibility is not RunEventVisibility.COMPACT
     while True:
         preview = coordinator.preview(request, proposal)
         write("")
@@ -12565,7 +12719,10 @@ def run_interactive_planning(
         write("  c. Cancel")
         choice = read("Review choice: ").strip().casefold()
         if choice in {"a", "approve"}:
-            approved = coordinator.approve(request, proposal)
+            with approval_guard if approval_guard is not None else nullcontext():
+                if cancellation_requested is not None and cancellation_requested():
+                    raise KeyboardInterrupt
+                approved = coordinator.approve(request, proposal)
             write(
                 f"Plan revision {approved.approval.revision} approved. "
                 "The controller may now create only the Agents shown above."
@@ -12601,7 +12758,7 @@ def run_interactive_planning(
                     proposal,
                     change,
                     answer_question=answer_question,
-                    activity_handler=progress,
+                    activity_handler=activity_handler or progress,
                 )
             except PlanningError as error:
                 session = coordinator.store.load_session(request.run_id)

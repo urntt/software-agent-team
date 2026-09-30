@@ -1112,6 +1112,8 @@ def test_product_planning_uses_one_bootstrap_agent_and_cleans_it(
         "progress_visibility": configuration.progress_visibility,
         "progress_display": configuration.progress_display,
         "progress_color": configuration.progress_color,
+        "metrics": None,
+        "visibility_handler": None,
     }
     materialize = observed["materialize"]
     assert materialize["bootstrap_capability"] is cli.AgentCapability.CLARIFICATION
@@ -1310,6 +1312,8 @@ def test_product_planning_preflights_finite_authorized_fallback_chain(
         "progress_visibility": configuration.progress_visibility,
         "progress_display": configuration.progress_display,
         "progress_color": configuration.progress_color,
+        "metrics": None,
+        "visibility_handler": None,
     }
     assert [model for model, _path in materialized] == [
         "provider/primary",

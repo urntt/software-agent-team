@@ -58,7 +58,7 @@ def completed(argv: object, returncode: int = 0) -> subprocess.CompletedProcess[
     return subprocess.CompletedProcess(argv, returncode, "", "")
 
 
-def test_standard_startup_report_hides_ready_detail_but_keeps_actions(
+def test_compact_startup_report_hides_ready_detail_but_keeps_actions(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     diagnostics = StartupDiagnostics(
@@ -79,15 +79,15 @@ def test_standard_startup_report_hides_ready_detail_but_keeps_actions(
         )
     )
 
-    render_startup_diagnostics(diagnostics, visibility="standard")
-    standard = capsys.readouterr().out
+    render_startup_diagnostics(diagnostics, visibility="compact")
+    compact = capsys.readouterr().out
     render_startup_diagnostics(diagnostics, visibility="detailed")
     detailed = capsys.readouterr().out
 
-    assert "1 ready, 1 warning" in standard
-    assert "git command" not in standard
-    assert "Available memory" in standard
-    assert "Close other workloads" in standard
+    assert "1 ready, 1 warning" in compact
+    assert "git command" not in compact
+    assert "Available memory" in compact
+    assert "Close other workloads" in compact
     assert "git command" in detailed
 
 

@@ -32,6 +32,9 @@ from software_agent_team.budgets import AgentBudgetUsage
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
+from software_agent_team.terminal_dashboard import TerminalDashboard
+from software_agent_team.terminal_metrics import TerminalRunMetrics
+from software_agent_team.terminal_presentation import InvocationPresentation
 
 RUN_EVENT_SCHEMA_VERSION = 6
 MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
@@ -748,6 +751,7 @@ class RunEvent(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    presentation: InvocationPresentation | None = Field(default=None, exclude=True)
     completed: int | None = Field(default=None, ge=0)
     total: int | None = Field(default=None, ge=1)
     changed_files: tuple[str, ...] = ()
@@ -924,6 +928,7 @@ class ProgressEvent:
     dependency_ids: tuple[str, ...] = ()
     budget_usage: AgentBudgetUsage | None = None
     checkpoint: ProgressCheckpointSnapshot | None = None
+    presentation: InvocationPresentation | None = None
     completed: int | None = None
     total: int | None = None
     changed_files: tuple[str, ...] = ()
@@ -1029,6 +1034,7 @@ class RunEventJournal:
                 dependency_ids=draft.dependency_ids,
                 budget_usage=draft.budget_usage,
                 checkpoint=draft.checkpoint,
+                presentation=draft.presentation,
                 completed=draft.completed,
                 total=draft.total,
                 changed_files=draft.changed_files,
@@ -1212,8 +1218,8 @@ class TerminalProgressRenderer:
         ProgressEventKind.AGENT_INITIALIZATION_STALLED: "!",
         ProgressEventKind.AGENT_INVOCATION_COMPLETED: "·",
         ProgressEventKind.AGENT_PROVIDER_ACTIVITY: "·",
-        ProgressEventKind.AGENT_TOOL_ACTIVE: "⚙",
-        ProgressEventKind.AGENT_TOOL_STARTED: "⚙",
+        ProgressEventKind.AGENT_TOOL_ACTIVE: "●",
+        ProgressEventKind.AGENT_TOOL_STARTED: "●",
         ProgressEventKind.AGENT_TOOL_COMPLETED: "✓",
         ProgressEventKind.AGENT_FINALIZING_RESPONSE: "…",
         ProgressEventKind.AGENT_FINALIZATION_PROGRESS: "·",
@@ -1270,6 +1276,7 @@ class TerminalProgressRenderer:
         environment: Mapping[str, str] | None = None,
         is_terminal: bool | None = None,
         terminal_width: Callable[[], int] | None = None,
+        metrics: TerminalRunMetrics | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("progress heartbeat must be positive")
@@ -1303,10 +1310,13 @@ class TerminalProgressRenderer:
         )
         self.unicode_enabled = self._output_supports_unicode()
         self.terminal_width = terminal_width
+        self.metrics = metrics
+        self._presentations: dict[str, tuple[str | None, InvocationPresentation]] = {}
         self._lock = threading.Lock()
         self._waiting: dict[tuple[str, int, int], _HeartbeatObservation] = {}
         self._rendered_checkpoint_digests: dict[tuple[str, int, int], str] = {}
         self._live_line_count = 0
+        self._dashboard: TerminalDashboard | None = None
         self._live_suspensions = 0
         self._pending_interaction_lines: list[str] = []
         self._last_live_elapsed_signature: tuple[
@@ -1317,6 +1327,43 @@ class TerminalProgressRenderer:
         """Render one persisted event and manage its elapsed-time heartbeat."""
 
         visible = self._event_visible(event)
+        if (
+            self.metrics is not None
+            and event.agent_id is not None
+            and (
+                event.presentation is not None
+                or event.kind
+                in {
+                    ProgressEventKind.AGENT_STARTED,
+                    ProgressEventKind.AGENT_INVOCATION_LAUNCHED,
+                }
+            )
+        ):
+            self.metrics.observe(event.agent_id, event.model, event.presentation)
+        with self._lock:
+            if event.agent_id is not None and event.presentation is not None:
+                previous = self._presentations.get(event.agent_id)
+                presentation = event.presentation
+                if (
+                    presentation.tool is None
+                    and previous is not None
+                    and presentation.session_id is not None
+                    and previous[1].session_id == presentation.session_id
+                ):
+                    presentation = presentation.model_copy(
+                        update={"tool": previous[1].tool}
+                    )
+                self._presentations[event.agent_id] = (event.model, presentation)
+                self._detail_agent = event.agent_id
+            elif (
+                event.agent_id is not None
+                and event.kind is ProgressEventKind.AGENT_INVOCATION_LAUNCHED
+            ):
+                self._presentations[event.agent_id] = (
+                    event.model,
+                    InvocationPresentation(),
+                )
+                self._detail_agent = event.agent_id
         live_state_changed = False
         if event.kind is ProgressEventKind.AGENT_INVOCATION_COMPLETED:
             live_state_changed = self._stop_waiting(event)
@@ -1357,7 +1404,12 @@ class TerminalProgressRenderer:
             live_state_changed = self._start_waiting(event)
 
         if self.live_enabled and event.kind in self._TRANSIENT_LIVE_KINDS:
-            if live_state_changed:
+            if self.visibility is not RunEventVisibility.COMPACT and event.kind in {
+                ProgressEventKind.AGENT_TOOL_STARTED,
+                ProgressEventKind.AGENT_TOOL_COMPLETED,
+            }:
+                self._print(self._event_line(event))
+            if live_state_changed or event.presentation is not None:
                 self._redraw_live()
             return
         if not visible:
@@ -1404,6 +1456,31 @@ class TerminalProgressRenderer:
             if self._live_suspensions == 1:
                 self._clear_live_locked()
 
+    def attach_dashboard(self, dashboard: TerminalDashboard | None) -> None:
+        """Delegate cursor ownership to the persistent shared editor."""
+
+        with self._lock:
+            self._clear_live_locked()
+            self._dashboard = dashboard
+
+    def live_lines(self) -> list[str]:
+        with self._lock:
+            return self._live_lines_locked()
+
+    def detail_lines(self) -> list[str]:
+        with self._lock:
+            if (
+                not self.live_enabled
+                or self.visibility is not RunEventVisibility.DETAILED
+                or not self._presentations
+            ):
+                return []
+            agent_id = self._detail_agent
+            model, presentation = self._presentations[agent_id]
+            return self._presentation_lines(
+                agent_id, model, presentation, self._terminal_columns()
+            )
+
     def resume_live(self) -> None:
         """Flush progress after the interactive editor releases the cursor."""
 
@@ -1426,9 +1503,8 @@ class TerminalProgressRenderer:
             self._print(cleaned)
 
     def _event_visible(self, event: RunEvent) -> bool:
-        return (
-            _VISIBILITY_RANK[event.minimum_visibility]
-            <= _VISIBILITY_RANK[self.visibility]
+        return _VISIBILITY_RANK[event.minimum_visibility] <= min(
+            2, _VISIBILITY_RANK[self.visibility] + 1
         )
 
     def _key(self, event: RunEvent) -> tuple[str, int, int] | None:
@@ -1526,8 +1602,6 @@ class TerminalProgressRenderer:
                 observation = self._waiting.get(key)
                 if observation is None or observation.stop is not stop:
                     return
-                if self.visibility is RunEventVisibility.COMPACT:
-                    continue
                 if self.live_enabled:
                     signature = self._live_elapsed_signature_locked()
                     if signature == self._last_live_elapsed_signature:
@@ -1550,11 +1624,27 @@ class TerminalProgressRenderer:
             if self.unicode_enabled
             else self._ascii_symbol(event.kind)
         )
+        summary = event.summary
+        if (
+            event.presentation is not None
+            and event.presentation.tool is not None
+            and event.kind
+            in {
+                ProgressEventKind.AGENT_TOOL_STARTED,
+                ProgressEventKind.AGENT_TOOL_COMPLETED,
+            }
+        ):
+            verb = (
+                "started"
+                if event.kind is ProgressEventKind.AGENT_TOOL_STARTED
+                else "finished"
+            )
+            summary = f"{event.agent_id} {verb} {event.presentation.tool.label}"
         if self.live_enabled:
             label = self._CATEGORY_LABELS[event.category]
-            value = f"{symbol} [{label}] {event.summary}"
+            value = f"{symbol} [{label}] {summary}"
         else:
-            value = f"{symbol} {event.summary}"
+            value = f"{symbol} {summary}"
         return self._colorize(value, self._event_color(event.kind))
 
     def _ascii_symbol(self, kind: ProgressEventKind) -> str:
@@ -1583,11 +1673,7 @@ class TerminalProgressRenderer:
 
     def _detail_lines(self, event: RunEvent) -> list[str]:
         lines: list[str] = []
-        if (
-            self.visibility is not RunEventVisibility.COMPACT
-            and event.checkpoint is not None
-            and self._checkpoint_details_changed(event)
-        ):
+        if event.checkpoint is not None and self._checkpoint_details_changed(event):
             checkpoint = event.checkpoint
             task_ids = ",".join(checkpoint.approved_task_ids) or "none"
             lines.append(
@@ -1623,7 +1709,7 @@ class TerminalProgressRenderer:
                 f"${checkpoint.known_estimated_cost_usd:.6f} settled estimate / "
                 f"${checkpoint.authorized_cost_usd} authorized; {cost_detail}"
             )
-        if self.visibility is not RunEventVisibility.DETAILED:
+        if self.visibility is RunEventVisibility.COMPACT:
             return [self._colorize(line, "2") for line in lines]
         if event.agent_id is not None:
             fields = [f"agent={event.agent_id}"]
@@ -1680,6 +1766,9 @@ class TerminalProgressRenderer:
             self._draw_live_locked()
 
     def _draw_live_locked(self) -> None:
+        if self._dashboard is not None:
+            self._dashboard.invalidate()
+            return
         if not self.live_enabled or self._live_suspensions:
             return
         lines = self._live_lines_locked()
@@ -1704,6 +1793,8 @@ class TerminalProgressRenderer:
         self._live_line_count = 0
 
     def _live_lines_locked(self) -> list[str]:
+        if not self.live_enabled:
+            return []
         now = self.monotonic()
         width = self._terminal_columns()
         blocks: list[list[str]] = []
@@ -1713,8 +1804,6 @@ class TerminalProgressRenderer:
         for key in sorted(self._waiting):
             observation = self._waiting[key]
             event = observation.event
-            if self.visibility is RunEventVisibility.COMPACT:
-                continue
             elapsed = max(0, int(now - observation.started))
             minutes, seconds = divmod(elapsed, 60)
             state = _current_agent_state(event.kind, event.checkpoint)
@@ -1755,7 +1844,7 @@ class TerminalProgressRenderer:
                 f"{coverage} {dot} {cost} settled"
             )
             block.append(self._colorize(self._fit(detail, width), "2"))
-            if self.visibility is RunEventVisibility.DETAILED:
+            if self.visibility is not RunEventVisibility.COMPACT:
                 block.append(
                     self._colorize(
                         self._fit(
@@ -1771,8 +1860,49 @@ class TerminalProgressRenderer:
             if lines:
                 lines.append("")
             lines.extend(block)
+        if (
+            self.visibility is not RunEventVisibility.COMPACT
+            and self.metrics is not None
+        ):
+            lines = [*self.metrics(), *lines]
+        if self.visibility is RunEventVisibility.DETAILED and self._dashboard is None:
+            for agent_id, (model, presentation) in sorted(self._presentations.items()):
+                lines.extend(
+                    self._presentation_lines(agent_id, model, presentation, width)
+                )
         if lines:
             lines.insert(0, "")
+        return lines
+
+    def _presentation_lines(
+        self,
+        agent_id: str,
+        model: str | None,
+        presentation: InvocationPresentation,
+        width: int,
+    ) -> list[str]:
+        lines = [
+            self._colorize(
+                f"Details · {agent_id} · {model or 'model unavailable'}", "1;36"
+            ),
+        ]
+        if presentation.tool is not None:
+            tool = presentation.tool
+            lines.append(self._fit("  Tool / command: " + tool.label, width))
+            for line in tool.arguments.splitlines()[:1]:
+                lines.append(self._fit("    " + line, width))
+            lines.append("  Result / command output:")
+            for line in tool.result.splitlines()[:1] or [
+                "completed; no text output"
+                if tool.completed
+                else "waiting for the tool result"
+            ]:
+                lines.append(self._fit("    " + line, width))
+        lines.append("  Model " + ("stream:" if presentation.streaming else "output:"))
+        for line in presentation.model_text.splitlines()[:2] or [
+            "no visible text reported"
+        ]:
+            lines.append(self._fit("    " + line, width))
         return lines
 
     def _live_elapsed_signature_locked(
@@ -1782,11 +1912,14 @@ class TerminalProgressRenderer:
         return tuple(
             (key, max(0, int(now - observation.started)))
             for key, observation in sorted(self._waiting.items())
-            if self.visibility is not RunEventVisibility.COMPACT
         )
 
     def _print_block(self, lines: list[str]) -> None:
         with self._lock:
+            if self._dashboard is not None:
+                self._dashboard.write("\n".join(lines))
+                self._dashboard.invalidate()
+                return
             if self._live_suspensions:
                 self._pending_interaction_lines.extend(lines)
                 return

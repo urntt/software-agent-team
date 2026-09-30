@@ -269,6 +269,10 @@ credentials, or unbounded model output. It reports attributable artifacts and
 controller-verified state. It must not invent a percentage when no meaningful
 total is known.
 
+Display levels and the persistent editor, including phase-appropriate Planning
+commands and bounded detailed previews, follow the
+[terminal interface contract](terminal-interface.md).
+
 ## Delivery Experience
 
 A completed run ends with one concise delivery view containing:

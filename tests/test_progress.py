@@ -346,7 +346,7 @@ def test_heartbeat_consumes_hidden_current_observation_and_visibility_changes(
         )
         before = output.getvalue()
         time.sleep(0.03)
-        assert output.getvalue() == before
+        assert "waiting for the model" in output.getvalue()[len(before) :]
         assert observation.event == hidden
         renderer.set_visibility(RunEventVisibility.DETAILED)
         deadline = time.monotonic() + 2
@@ -660,7 +660,7 @@ def test_standard_renderer_shows_model_spend_after_each_invocation(
 
     rendered = output.getvalue()
     assert "task model spend $0.010000 estimated / $1.00 authorized" in rendered
-    assert "known_cost_usd=" not in rendered
+    assert "known_cost_usd=" in rendered
 
 
 def test_liveness_events_keep_stall_visible_and_stream_detail_optional(
@@ -770,7 +770,7 @@ def test_checkpoint_rejects_inconsistent_cost_or_review_authority() -> None:
         ProgressCheckpointSnapshot.model_validate(payload)
 
 
-def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
+def test_compact_keeps_checkpoint_and_standard_adds_invocation_metadata(
     tmp_path: Path,
 ) -> None:
     snapshot = ProgressCheckpointSnapshot(
@@ -812,7 +812,9 @@ def test_checkpoint_projection_is_hidden_in_compact_and_explained_in_standard(
             phase=RunPhase.IMPLEMENTING,
         )
 
-    assert "progress phase=" not in compact_output.getvalue()
+    assert "progress phase=" in compact_output.getvalue()
+    assert "agent=builder" not in compact_output.getvalue()
+    assert "agent=builder" in standard_output.getvalue()
     rendered = standard_output.getvalue()
     assert "phase=tool_active tasks=TASK_BUILD" in rendered
     assert "completed_tools=2" in rendered
@@ -925,7 +927,7 @@ def test_live_renderer_coalesces_high_frequency_checkpoint_updates(
     assert renderer.color_enabled
     assert "\x1b[" in rendered
     assert "[agent] Builder completed" in rendered
-    assert rendered.count("\n") <= 5
+    assert rendered.count("\n") <= 7
     assert "checkpoint 99" not in rendered
 
 
@@ -990,7 +992,7 @@ def test_real_pty_live_output_is_bounded_by_state_changes(tmp_path: Path) -> Non
     rendered = captured.decode(errors="replace")
     assert renderer.live_enabled
     assert "Builder completed" in rendered
-    assert rendered.count("\n") <= 5
+    assert rendered.count("\n") <= 7
     assert "observation 199" not in rendered
 
 
@@ -1125,9 +1127,9 @@ def test_live_panel_separates_adjacent_agents(tmp_path: Path) -> None:
         with renderer._lock:
             lines = renderer._live_lines_locked()
         assert lines[0] == ""
-        assert lines[4] == ""
+        assert lines[5] == ""
         assert "builder" in lines[1]
-        assert "reviewer" in lines[5]
+        assert "reviewer" in lines[6]
     finally:
         renderer.close()
 
@@ -1543,7 +1545,53 @@ def test_renderer_failure_does_not_change_persisted_execution_state(
     assert event_journal.render_errors == ["RuntimeError: cannot render event 1"]
 
 
-def test_compact_visibility_hides_standard_detail(tmp_path: Path) -> None:
+def test_ephemeral_detail_is_visible_but_never_persisted_as_event_authority(
+    tmp_path: Path,
+) -> None:
+    from software_agent_team.terminal_presentation import (
+        InvocationPresentation,
+        TerminalToolDetail,
+    )
+
+    renderer = TerminalProgressRenderer(
+        output=StringIO(),
+        visibility=RunEventVisibility.DETAILED,
+        is_terminal=True,
+        environment={"TERM": "xterm"},
+    )
+    event_journal = journal(tmp_path, handler=renderer)
+    preview = InvocationPresentation(
+        session_id="current",
+        model_text="VISIBLE MODEL TEXT",
+        tool=TerminalToolDetail(
+            label="command: pytest", arguments="pytest -q", result="3 passed"
+        ),
+    )
+    returned = event_journal.append(
+        ProgressEvent(
+            kind=ProgressEventKind.AGENT_TOOL_COMPLETED,
+            message="Builder finished pytest",
+            agent_id="builder",
+            iteration=1,
+            attempt=1,
+            model="provider/model",
+            presentation=preview,
+        ),
+        lifecycle_revision=1,
+        phase=RunPhase.IMPLEMENTING,
+    )
+    assert returned.presentation == preview
+    rendered = "\n".join(renderer.detail_lines())
+    assert "VISIBLE MODEL TEXT" in rendered and "3 passed" in rendered
+    loaded = event_journal.load()[0]
+    assert loaded.presentation is None
+    assert canonical_model_sha256(loaded) == canonical_model_sha256(returned)
+    for path in event_journal.events_directory.glob("*.json"):
+        assert "VISIBLE MODEL TEXT" not in path.read_text()
+    renderer.close()
+
+
+def test_compact_visibility_keeps_previous_standard_milestones(tmp_path: Path) -> None:
     output = StringIO()
     renderer = TerminalProgressRenderer(
         output=output,
@@ -1572,4 +1620,4 @@ def test_compact_visibility_hides_standard_detail(tmp_path: Path) -> None:
     )
 
     assert "Visible run summary" in output.getvalue()
-    assert "Hidden workspace detail" not in output.getvalue()
+    assert "Hidden workspace detail" in output.getvalue()

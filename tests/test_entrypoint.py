@@ -72,3 +72,22 @@ def test_help_process_does_not_import_workflow_cli() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == ROOT_HELP
+
+
+def test_uninstall_help_runs_owned_script_without_workflow_import() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from software_agent_team.entrypoint import main; "
+            "status = main(['uninstall', '--help']); "
+            "assert 'software_agent_team.cli' not in sys.modules; "
+            "raise SystemExit(status)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Usage: sat uninstall [options]" in completed.stdout
+    assert "--export-to PATH" in completed.stdout

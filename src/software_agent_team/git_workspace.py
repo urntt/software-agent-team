@@ -885,6 +885,102 @@ class GitWorkspaceManager:
             self._git(repository, args).stdout.decode("utf-8", errors="strict").strip()
         )
 
+    def live_change_counts(
+        self, repository: Path, *, base_commit: str
+    ) -> tuple[int, int, bool]:
+        """Read a best-effort diff preview without executing generated programs."""
+
+        if (
+            repository.is_symlink()
+            or repository.resolve().parent != self.root.resolve()
+        ):
+            raise GitWorkspaceError("live diff must belong to one isolated workspace")
+        if re.fullmatch(COMMIT_PATTERN, base_commit) is None:
+            raise GitWorkspaceError("live diff requires an exact base commit")
+        records = self._git(
+            repository,
+            [
+                "diff",
+                "--numstat",
+                "-z",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                base_commit,
+                "--",
+            ],
+        ).stdout.split(b"\0")
+        added = removed = 0
+        partial = False
+        for record in records:
+            if not record:
+                continue
+            columns = record.split(b"\t", 2)
+            if (
+                len(columns) != 3
+                or not columns[0].isdigit()
+                or not columns[1].isdigit()
+            ):
+                partial = True
+                continue
+            added += int(columns[0])
+            removed += int(columns[1])
+        untracked = self._git(
+            repository, ["ls-files", "--others", "--exclude-standard", "-z"]
+        ).stdout
+        read_budget = 4 * 1024 * 1024
+        for file_index, relative in enumerate(untracked.split(b"\0")):
+            if not relative:
+                continue
+            if file_index >= 256 or read_budget <= 0:
+                partial = True
+                break
+            parts = Path(os.fsdecode(relative)).parts
+            if not parts or any(part in {"..", "/"} for part in parts):
+                partial = True
+                continue
+            directory = None
+            try:
+                directory = os.open(
+                    repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                )
+                for part in parts[:-1]:
+                    child = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=directory,
+                    )
+                    os.close(directory)
+                    directory = child
+                descriptor = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=directory,
+                )
+                try:
+                    metadata = os.fstat(descriptor)
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > min(
+                        1024 * 1024, read_budget
+                    ):
+                        partial = True
+                        continue
+                    data = os.read(descriptor, metadata.st_size + 1)
+                    read_budget -= len(data)
+                finally:
+                    os.close(descriptor)
+                if b"\0" in data:
+                    partial = True
+                    continue
+                added += data.count(b"\n") + int(
+                    bool(data) and not data.endswith(b"\n")
+                )
+            except OSError:
+                partial = True
+            finally:
+                if directory is not None:
+                    os.close(directory)
+        return added, removed, partial
+
     def _git(
         self,
         repository: Path,

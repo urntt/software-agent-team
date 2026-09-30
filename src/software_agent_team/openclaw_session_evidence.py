@@ -11,7 +11,7 @@ import shlex
 import sqlite3
 import stat
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import quote
@@ -27,6 +27,14 @@ from software_agent_team.artifacts import (
 )
 from software_agent_team.invocation_lifecycle import InitializationCheckpoint
 from software_agent_team.submissions import ARTIFACT_SUBMISSION_TOOL
+from software_agent_team.terminal_presentation import (
+    InvocationPresentation,
+    TerminalToolDetail,
+    display_text,
+    invocation_preview,
+    tool_preview,
+    visible_message,
+)
 
 _MAX_INDEX_BYTES = 4 * 1024 * 1024
 _MAX_SESSION_BYTES = 16 * 1024 * 1024
@@ -135,6 +143,7 @@ class OpenClawToolActivity:
 
     tool_name: str
     executable: str | None
+    presentation: TerminalToolDetail | None = None
 
 
 _ACTIVITY_TOOL_NAMES = {
@@ -245,6 +254,7 @@ class OpenClawSessionActivity:
     terminal_response_observed: bool
     started_tools: tuple[OpenClawToolActivity, ...] = ()
     completed_tools: tuple[OpenClawToolActivity, ...] = ()
+    presentation: InvocationPresentation | None = None
 
 
 @dataclass(frozen=True)
@@ -1168,6 +1178,8 @@ def inspect_openclaw_session_activity(
     session_key: str,
     prompt: str,
     baseline: OpenClawInitializationBaseline | None = None,
+    include_presentation: bool = False,
+    model: str | None = None,
 ) -> OpenClawSessionActivity | None:
     """Inspect current-turn lifecycle records without retaining their content.
 
@@ -1254,6 +1266,11 @@ def inspect_openclaw_session_activity(
                     executable,
                     item.get("arguments"),
                 )
+                if include_presentation:
+                    started[external_id] = replace(
+                        started[external_id],
+                        presentation=tool_preview(tool_name, item.get("arguments")),
+                    )
                 poll_identity = _process_poll_identity(
                     tool_name,
                     item.get("arguments"),
@@ -1282,6 +1299,20 @@ def inspect_openclaw_session_activity(
                     "OpenClaw tool result names a different tool"
                 )
             completed.add(external_id)
+            if include_presentation and activity.presentation is not None:
+                activity = replace(
+                    activity,
+                    presentation=activity.presentation.model_copy(
+                        update={
+                            "completed": True,
+                            "result": (
+                                "typed submission received"
+                                if activity.tool_name == "sat_submit_artifact"
+                                else display_text(visible_message(message))
+                            ),
+                        }
+                    ),
+                )
             completed_tools.append(activity)
             poll_identity = process_polls.get(external_id)
             poll_outcome = _running_process_poll_outcome(message)
@@ -1319,6 +1350,11 @@ def inspect_openclaw_session_activity(
         ),
         started_tools=tuple(started.values()),
         completed_tools=tuple(completed_tools),
+        presentation=(
+            invocation_preview(invocation, session_id=snapshot.session_id, model=model)
+            if include_presentation
+            else None
+        ),
     )
 
 

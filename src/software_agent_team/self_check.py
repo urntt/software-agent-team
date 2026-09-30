@@ -688,7 +688,7 @@ def render_self_check_report(
     ]
     visible = (
         report.checks
-        if visibility == "detailed"
+        if visibility != "compact"
         else tuple(
             check for check in report.checks if check.status is not SelfCheckStatus.PASS
         )
@@ -708,7 +708,7 @@ def render_self_check_report(
                 f"  Evidence: {', '.join(item.reference for item in check.evidence)}"
             )
             lines.append(f"  Action: {check.remediation}")
-        elif visibility == "detailed":
+        elif visibility != "compact":
             lines.append(
                 f"  Evidence: {', '.join(item.reference for item in check.evidence)}"
             )

@@ -931,7 +931,7 @@ def render_startup_diagnostics(
         for state in DiagnosticState
     }
     lines = ["Device check"]
-    if visibility != "detailed":
+    if visibility == "compact":
         lines.append(
             f"  {len(diagnostics.checks)} checks: "
             f"{counts[DiagnosticState.READY]} ready, "
@@ -940,7 +940,7 @@ def render_startup_diagnostics(
         )
     visible = (
         diagnostics.checks
-        if visibility == "detailed"
+        if visibility != "compact"
         else tuple(
             check
             for check in diagnostics.checks
@@ -956,7 +956,7 @@ def render_startup_diagnostics(
         lines.append(f"{symbol} {check.label}: {check.detail}")
         if check.action is not None:
             lines.append(f"  Action: {check.action}")
-    if visibility != "detailed":
+    if visibility == "compact":
         lines.append("  Result: ready" if diagnostics.ready else "  Result: not ready")
     for line in lines:
         if not color:

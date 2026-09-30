@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import select
 import sys
-import termios
 import threading
-import tty
 from collections.abc import Callable
 from typing import TextIO
+
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 
 from software_agent_team.controls import (
     ControlApplicationBoundary,
@@ -19,9 +19,10 @@ from software_agent_team.controls import (
     ControlTarget,
     ControlTargetKind,
 )
+from software_agent_team.progress import terminal_presentation_capable
 from software_agent_team.run_control import RunPhase
 from software_agent_team.teams import TeamPlan
-from software_agent_team.terminal_input import TerminalInput
+from software_agent_team.terminal_dashboard import TerminalDashboard
 
 
 class ControlConsoleError(ValueError):
@@ -30,18 +31,74 @@ class ControlConsoleError(ValueError):
 
 type NoticeHandler = Callable[[str], None]
 type VisibilityHandler = Callable[[str], None]
-type InputActivityHandler = Callable[[bool], None]
-type ControlLineReader = Callable[[str], str]
+_COMMAND_GUIDE = {
+    "help": ("", "Show this command guide"),
+    "visibility": ("compact|standard|detailed", "Change the whole terminal display"),
+    "controls": ("", "List requests and their controller status"),
+    "guide": ("agent|future|phase:name instruction", "Guide future work"),
+    "correct": ("instruction", "Request a Planning revision"),
+    "pause": ("", "Pause at the next safe checkpoint"),
+    "resume": ("", "Resume paused scheduling"),
+    "interrupt": ("agent", "Stop one active Agent"),
+    "cancel": ("confirm", "Stop the run; requires confirmation"),
+}
+
+
+class ControlCompleter(Completer):
+    """Complete commands and finite arguments without submitting input."""
+
+    def __init__(self, *, agents: tuple[str, ...] = (), planning: bool = False):
+        self.agents = agents
+        self.planning = planning
+
+    def get_completions(self, document: Document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+        command, separator, arguments = text.partition(" ")
+        if not separator:
+            names = (
+                ("help", "status", "visibility", "cancel")
+                if self.planning
+                else _COMMAND_GUIDE
+            )
+            for name in names:
+                candidate = "/" + name
+                if candidate.startswith(command):
+                    description = (
+                        "Show Planning status"
+                        if name == "status"
+                        else _COMMAND_GUIDE[name][1]
+                    )
+                    yield Completion(
+                        candidate,
+                        start_position=-len(command),
+                        display_meta=description,
+                    )
+            return
+        if " " in arguments:
+            return
+        choices = {
+            "/visibility": ("compact", "standard", "detailed"),
+            "/cancel": ("confirm",),
+            "/interrupt": self.agents,
+            "/guide": (
+                *self.agents,
+                "future",
+                *("phase:" + phase.value for phase in RunPhase),
+            ),
+        }.get(command, ())
+        for choice in choices:
+            if choice.startswith(arguments):
+                yield Completion(choice, start_position=-len(arguments))
 
 
 def control_help() -> str:
-    """Return the concise interactive command guide."""
+    """Return the interactive command guide from the completion registry."""
 
-    return (
-        "Controls: /guide <agent|future|phase:name> <instruction>; "
-        "/correct <instruction>; /pause; /resume; /interrupt <agent>; "
-        "/cancel confirm; /visibility <compact|standard|detailed>; "
-        "/controls; /help"
+    return "Controls (Tab completes commands and targets):\n" + "\n".join(
+        f"  /{command} {usage:<35} {description}"
+        for command, (usage, description) in _COMMAND_GUIDE.items()
     )
 
 
@@ -200,8 +257,10 @@ class TerminalControlConsole:
         input_stream: TextIO | None = None,
         notice_handler: NoticeHandler | None = None,
         visibility_handler: VisibilityHandler | None = None,
-        input_activity_handler: InputActivityHandler | None = None,
-        line_reader: ControlLineReader | None = None,
+        output_stream: TextIO | None = None,
+        live_lines: Callable[[], list[str]] | None = None,
+        detail_lines: Callable[[], list[str]] | None = None,
+        color: bool = True,
         poll_seconds: float = 0.2,
     ) -> None:
         if poll_seconds <= 0:
@@ -211,15 +270,11 @@ class TerminalControlConsole:
         self.input_stream = sys.stdin if input_stream is None else input_stream
         self.notice_handler = notice_handler or (lambda value: print(value, flush=True))
         self.visibility_handler = visibility_handler
-        self.input_activity_handler = input_activity_handler
-        self._terminal_input = TerminalInput()
-        self._custom_line_reader = line_reader is not None
-        self.line_reader = line_reader or (
-            lambda initial: self._terminal_input.read_line_cancellable(
-                "control> ",
-                default=initial,
-            )
-        )
+        self.output_stream = sys.stdout if output_stream is None else output_stream
+        self.live_lines = live_lines or (lambda: [])
+        self.detail_lines = detail_lines
+        self.color = color
+        self.dashboard: TerminalDashboard | None = None
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -229,6 +284,21 @@ class TerminalControlConsole:
 
         if self._thread is not None:
             raise RuntimeError("the control console is already running")
+        if self._is_interactive_terminal():
+            self.dashboard = TerminalDashboard(
+                submit=self._handle_line,
+                completer=ControlCompleter(
+                    agents=tuple(agent.id for agent in self.team_plan.agents)
+                ),
+                live_lines=self.live_lines,
+                detail_lines=self.detail_lines,
+                input_stream=self.input_stream,
+                output_stream=self.output_stream,
+                color=self.color,
+            )
+            self.dashboard.start()
+            self._thread = self.dashboard._thread
+            return
         self.notice_handler(control_help())
         self._thread = threading.Thread(
             target=self._read_loop,
@@ -241,14 +311,13 @@ class TerminalControlConsole:
         """Stop polling without consuming input from a later Planning session."""
 
         self._stop.set()
-        self._terminal_input.cancel_active_read()
+        if self.dashboard is not None:
+            self.dashboard.close()
+            return
         if self._thread is not None:
             self._thread.join(timeout=max(2.0, self.poll_seconds * 2))
 
     def _read_loop(self) -> None:
-        if self._is_interactive_terminal():
-            self._read_interactive_loop()
-            return
         while not self._stop.is_set():
             if not self._input_ready():
                 continue
@@ -267,74 +336,20 @@ class TerminalControlConsole:
             if message:
                 self.notice_handler(message)
 
-    def _read_interactive_loop(self) -> None:
-        """Wait invisibly for '/', then yield the cursor to the shared line editor."""
-
-        descriptor = self.input_stream.fileno()
-        original = termios.tcgetattr(descriptor)
-        try:
-            tty.setcbreak(descriptor, termios.TCSANOW)
-            console_mode = termios.tcgetattr(descriptor)
-            console_mode[3] &= ~termios.ECHO
-            termios.tcsetattr(descriptor, termios.TCSANOW, console_mode)
-            while not self._stop.is_set():
-                ready, _, _ = select.select(
-                    [descriptor],
-                    [],
-                    [],
-                    self.poll_seconds,
-                )
-                if not ready:
-                    continue
-                first = os.read(descriptor, 1)
-                if first in {b"", b"\x04"}:
-                    return
-                if first in {b"\r", b"\n"}:
-                    continue
-                if first != b"/":
-                    self.notice_handler(
-                        "Run controls begin with '/'. Type /help for examples."
-                    )
-                    continue
-                if self._stop.is_set():
-                    return
-                self._set_input_active(True)
-                try:
-                    line = self.line_reader("/")
-                except KeyboardInterrupt:
-                    self.notice_handler("Control entry cancelled; execution continues.")
-                    continue
-                except EOFError:
-                    return
-                finally:
-                    self._set_input_active(False)
-                self._submit_line(line)
-        finally:
-            termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
-
-    def _submit_line(self, line: str) -> None:
-        try:
-            message = submit_control_line(
-                line,
-                store=self.store,
-                team_plan=self.team_plan,
-                visibility_handler=self.visibility_handler,
-            )
-        except (ControlConsoleError, ValueError) as error:
-            message = f"Control not queued: {error}"
-        if message:
-            self.notice_handler(message)
-
-    def _set_input_active(self, active: bool) -> None:
-        if self.input_activity_handler is not None:
-            self.input_activity_handler(active)
+    def _handle_line(self, line: str) -> str:
+        return submit_control_line(
+            line,
+            store=self.store,
+            team_plan=self.team_plan,
+            visibility_handler=self.visibility_handler,
+        )
 
     def _is_interactive_terminal(self) -> bool:
         try:
             return (
                 self.input_stream.isatty()
                 and self.input_stream.fileno() >= 0
-                and (self._custom_line_reader or sys.stdout.isatty())
+                and terminal_presentation_capable(self.output_stream)
             )
         except (AttributeError, OSError):
             return False

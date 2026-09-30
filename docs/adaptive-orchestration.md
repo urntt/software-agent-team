@@ -1267,49 +1267,31 @@ last meaningful safe summary, and the dependency or blocker when known. It does
 not invent a completion percentage when the controller lacks a meaningful
 denominator.
 
-The default standard projection includes one Controller-owned checkpoint
-snapshot for active work: the approved task and invocation phase, last verified
-checkpoint, next controller-known checkpoint, completed tool-operation count,
-Git snapshot, gate and Review state, known task-wide USD spend, authorization,
-and remaining amount. A checkpoint is an observed state transition or an
-approved future boundary; it is never partial model text, hidden reasoning, a
-tool argument, or an Agent-authored progress claim.
-
-Tool start/completion events preserve attributed history, while the phase and
-counters in every event describe the current Controller snapshot. The adapter
-applies that snapshot before publishing its deltas. If one observation contains
-both a start and its completion, the UI may show both historical events, but it
-must show zero active tools, the updated completion count, and no synthetic
-return to `tool_active`. The live label is derived from an allow-listed tool name
-or executable and contains only a bounded action class, target class, and optional
-safe executable basename. Arbitrary tool names, full commands, arguments, output,
-paths, and secrets are excluded. Identical checkpoint and budget projections are
-suppressed within an invocation. Every event remains persisted. Append-only log
-mode renders every event allowed by the selected visibility, while live TTY mode
-coalesces high-frequency observations into the current Agent panel and retains
-milestones, warnings, decisions, and terminal results in scrollback.
+Controller-owned checkpoint snapshots describe approved tasks, invocation
+phase, verified and next checkpoints, tool counts, Git/gate/Review state,
+and budget facts. A checkpoint is never partial model text, a tool argument,
+or an Agent-authored progress claim. Tool deltas preserve attributed history;
+the current snapshot owns active/completed counters even when a single
+observation contains both a start and completion.
 
 ### Visibility Levels
 
-The user may change visibility during a run without changing execution:
+Visibility applies throughout startup, Planning, overview, and execution.
+`compact` retains the former standard checkpoint view. `standard` includes
+former detailed metadata, live elapsed/cost/budget/context/Git observations,
+and bounded attributable file/command milestones. `detailed` adds a separate
+live preview area for visible model text and tool arguments/results. The
+[terminal interface](terminal-interface.md) owns exact presentation, update
+rates, source limits, and keyboard behavior.
 
-- `compact`: current run phase, important recovery or stopping transitions,
-  budget warnings, blockers, and terminal result;
-- `standard` (default): compact information plus every Agent's approved task,
-  invocation phase, last and next checkpoints, completed work, Git/gate/Review
-  state, elapsed time, and task-wide budget snapshot;
-- `detailed`: standard information plus attempt IDs, exact initialization
-  checkpoints, dependency transitions, model route, trusted activity counters,
-  tool categories, artifact references, and controller validation events.
-
-Raw provider credentials, environment secrets, hidden reasoning, unbounded
-model output, and unrelated host information are excluded from every level.
-On a capable TTY, `auto` display updates a bounded live panel and `auto` color
-uses consistent active, success, warning, and failure colors. `log` display is
-append-only; `never` disables color. Non-TTY output and `TERM=dumb` emit ordered
-plain lines with no cursor controls. Display, color, and visibility are separate
-persisted settings with one-run CLI overrides. Logs and a future graphical UI
-must consume the same event contract rather than infer progress independently.
+The persisted event contract retains content-free classifications, safe
+executable basenames, and evidence references. Bounded detailed previews are
+an ephemeral projection of the same attributable invocation, not persisted
+checkpoints, independent execution evidence, or approval authority. Native
+hidden reasoning, credentials, unbounded output, and unrelated host information
+are excluded. Identical checkpoints are coalesced in live mode; semantic
+milestones remain in scrollback. Append-only progress and the durable journal
+remain available independently of the interactive editor.
 
 ## Input and Interaction Quality
 
@@ -1325,10 +1307,10 @@ The terminal interaction must remain usable while progress is updating:
 - Allow concise and multiline natural-language input without requiring JSON or
   shell escaping. Enter submits the full buffer, while Alt+Enter or Ctrl+O adds
   a newline;
-- Suspend live-panel redraw while the user is typing so keystrokes and text are
-  never overwritten. Buffer terminal progress notices until the editor releases
-  the cursor, then print them in order; cancel an unfinished control editor and
-  restore terminal mode before the run returns to the shell;
+- Use one persistent terminal owner so live progress, detailed previews,
+  completion, and the editable control/answer buffer coexist. Append semantic
+  notices without replacing input; discard unfinished controls and restore
+  terminal mode before returning to the shell;
 - State when an action will spend model budget, invalidate work, interrupt an
   active attempt, or make cancellation terminal;
 - Adapt to narrow terminals and provide a stable line-mode fallback with no

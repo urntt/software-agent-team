@@ -295,7 +295,7 @@ def test_installer_prepares_cli_image_and_checks_idempotently(tmp_path: Path) ->
     )
     assert not (tmp_path / "existing-openclaw.log").exists()
     assert "install: next=sat" in first.stdout
-    assert "install: uninstall=sat-uninstall" in first.stdout
+    assert "install: uninstall=sat uninstall" in first.stdout
     docker_calls = docker_log.read_text(encoding="utf-8")
     assert "info" in docker_calls
     assert (

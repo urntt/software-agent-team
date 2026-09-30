@@ -52,7 +52,7 @@ fail() {
 
 show_help() {
   cat <<'EOF'
-Usage: sat-uninstall [options]
+Usage: sat uninstall [options]
 
 Remove SAT launchers, its application environment, and its private OpenClaw
 binary. By default, saved SAT configuration, generated data, and SAT's isolated
