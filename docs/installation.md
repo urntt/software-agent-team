@@ -774,6 +774,7 @@ For a contributor checkout, follow the update workflow in
 `sat uninstall` is the canonical command. The existing `sat-uninstall` launcher
 remains a compatibility alias to the same ownership-bound script until SAT 1.0;
 it will be removed in that major release. It has no separate removal logic.
+Releases predating the subcommand use this compatibility launcher.
 
 Run from any directory:
 

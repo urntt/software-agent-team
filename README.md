@@ -248,6 +248,10 @@ Run the guided uninstaller from any directory:
 sat uninstall
 ```
 
+If your installed release predates this subcommand, use the compatibility
+launcher `sat-uninstall`. See [implementation status](STATUS.md) for the
+published release and [removal behavior](docs/installation.md#guided-uninstallation).
+
 Uninstallation preserves configuration, Planning evidence, generated work, and
 SAT's isolated provider state by default. It can export configuration and
 generated data before removal, and it requires explicit choices before purging

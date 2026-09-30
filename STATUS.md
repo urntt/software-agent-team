@@ -41,6 +41,16 @@ establish the current release's provider-backed behavior.
 
 ## Implemented in the checkout
 
+- The checkout adds `sat uninstall`, persistent shared Planning/execution
+  controls with completion and multiline editing, journey-wide visibility,
+  read-only elapsed/budget/context/Git telemetry, and bounded visible tool/model
+  previews. These changes are not in the published `v0.5.5` release. A clean
+  non-root Linux canonical gate on `dd86e54e9b54afdf2e019c1eebbf43222ac7f48e`
+  passed **2,008 tests**, with one cross-UID fixture skipped because it requires
+  root; doctor, formatting, and lint also passed. No provider-backed or complete
+  ordinary-user journey was started for this batch. WSL visual usability and
+  published lifecycle validation remain pending. See the
+  [terminal contract](docs/terminal-interface.md).
 - The normal `sat` journey checks the local runtime, configures an isolated
   provider profile, captures a plain-language request, clarifies material user
   decisions, shows a task-defined proposal, requires approval, runs the
