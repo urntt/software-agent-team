@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** September 29, 2026 (Pacific Time)
+**Last reviewed:** September 30, 2026 (Pacific Time)
 
 This page records current implementation and validation facts. Product direction
 and experiments belong to [`VISION.md`](VISION.md); behavioral contracts and
@@ -45,11 +45,15 @@ establish the current release's provider-backed behavior.
   controls with completion and multiline editing, journey-wide visibility,
   read-only elapsed/budget/context/Git telemetry, and bounded visible tool/model
   previews. These changes are not in the published `v0.5.5` release. A clean
-  non-root Linux canonical gate on `dd86e54e9b54afdf2e019c1eebbf43222ac7f48e`
-  passed **2,008 tests**, with one cross-UID fixture skipped because it requires
-  root; doctor, formatting, and lint also passed. No provider-backed or complete
-  ordinary-user journey was started for this batch. WSL visual usability and
-  published lifecycle validation remain pending. See the
+  non-root Linux canonical gate on `cefc8e7438cf6906c05128f7458f4e20a26d476b`
+  passed **2,009 tests**, with one cross-UID fixture skipped because it requires
+  root; doctor, formatting, and lint also passed. Both production-executor
+  transport scenarios passed with pinned OpenClaw `2026.9.6` and a localhost
+  HTTP fixture; attributable previews included visible streaming text,
+  current-request context, and tools. This does not establish real provider
+  behavior. No provider-backed or complete ordinary-user journey was started
+  for this batch. WSL visual usability and published lifecycle validation
+  remain pending. See the
   [terminal contract](docs/terminal-interface.md).
 - The normal `sat` journey checks the local runtime, configures an isolated
   provider profile, captures a plain-language request, clarifies material user

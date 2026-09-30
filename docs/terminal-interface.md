@@ -36,6 +36,10 @@ reasoning and typed submission bodies are excluded. Credential-shaped text and
 known environment credentials are redacted. Previews are bounded (1,000 model
 characters, 600 argument/result characters, a 64 KiB stream buffer) and are
 ephemeral. They do not enter the Controller event journal or grant authority.
+Native CLI frames that omit `sessionId` use one matching native `runId` from
+the executor-owned private stream, together with the attributable session.
+Explicit foreign session/run identities and hidden/end-message raw content
+remain excluded.
 During streaming, the bounded visible tail updates; native thinking events are
 never selected. Missing or unattributable text remains unavailable.
 
