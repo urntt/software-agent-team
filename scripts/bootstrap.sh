@@ -120,5 +120,6 @@ fi
 
 echo "bootstrap: managed application=$task_install_root"
 echo "bootstrap: channel=$task_channel"
-echo "bootstrap: uninstall=sat uninstall"
+# This helper can install a release predating the canonical uninstall subcommand.
+echo "bootstrap: uninstall=sat-uninstall"
 echo "bootstrap: next=sat"
