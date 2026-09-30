@@ -31,6 +31,11 @@ def display_text(value: str, *, limit: int = 600, tail: bool = False) -> str:
             and len(secret) >= 8
         ):
             text = text.replace(secret, "[redacted]")
+            # The raw stream can already end inside a credential. Remove its
+            # recognizable suffix prefix before choosing a bounded visible tail.
+            start = text.rfind(secret[:8], max(0, len(text) - len(secret)))
+            if start >= 0 and secret.startswith(text[start:]):
+                text = text[:start] + "[redacted]"
     text = _SECRET_ASSIGNMENT.sub(r"\1[redacted]", text)
     text = _KEY.sub("[redacted]", text)
     text = _REASONING.sub("", text)

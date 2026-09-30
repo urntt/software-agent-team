@@ -75,6 +75,10 @@ def test_stream_only_projects_current_session_visible_events_and_redacts(
     assert "\x1b" not in text
     assert len(display_text("a" * 100000, limit=1000)) == 1000
     assert "hidden" not in display_text("hello <think>hidden</think> world")
+    boundary = "a" * (65536 - 12) + key
+    for raw in (boundary, boundary[:65536]):
+        preview = display_text(raw, limit=1000, tail=True)
+        assert key[:12] not in preview and preview.endswith("[redacted]")
     tool = tool_preview(
         "exec",
         {"command": "python app.py --api-key=sk-examplekey"},
