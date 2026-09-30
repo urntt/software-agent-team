@@ -102,6 +102,7 @@ from software_agent_team.teams import (
 from software_agent_team.terminal_presentation import (
     InvocationPresentation,
     display_text,
+    native_stream_run_id,
     stream_preview,
 )
 
@@ -2202,6 +2203,7 @@ class _ProviderLivenessMonitor:
         self.compaction_lineage_error_since: float | None = None
         self.presentation: InvocationPresentation | None = None
         self._stream_session_id: str | None = None
+        self._stream_runtime_run_id: str | None = None
         self._stream_text = ""
 
     def poll(self, now: float, *, enforce_stall: bool = True) -> bool:
@@ -2226,6 +2228,8 @@ class _ProviderLivenessMonitor:
         if raw_activity:
             self.raw_stream_observed = True
             self.provider_activity_observations += 1
+        if self._stream_runtime_run_id is None:
+            self._stream_runtime_run_id = native_stream_run_id(bytes(stream_batch))
 
         try:
             session = inspect_openclaw_session_activity(
@@ -2266,6 +2270,7 @@ class _ProviderLivenessMonitor:
                     bytes(stream_batch),
                     session_id=self.presentation.session_id,
                     previous=self._stream_text,
+                    runtime_run_id=self._stream_runtime_run_id,
                 )
                 if self._stream_text and not session.terminal_response_observed:
                     self.presentation = self.presentation.model_copy(

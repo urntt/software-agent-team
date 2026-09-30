@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import unicodedata
@@ -165,30 +166,57 @@ def invocation_preview(
     )
 
 
-def stream_preview(batch: bytes, *, session_id: str, previous: str = "") -> str:
-    """Read only visible text events for this exact attributable runtime session."""
+def native_stream_run_id(batch: bytes) -> str | None:
+    """Find the native identity in one executor-owned private stream batch."""
 
-    import json
+    for record in _visible_stream_records(batch):
+        run_id = record.get("runId")
+        if isinstance(run_id, str) and 0 < len(run_id) <= 128:
+            return run_id
+    return None
 
-    text = previous
+
+def _visible_stream_records(batch: bytes):
     for line in batch.splitlines():
         try:
             record = json.loads(line)
         except (ValueError, UnicodeError):
             continue
         if (
-            not isinstance(record, dict)
-            or record.get("sessionId") != session_id
-            or record.get("event") != "assistant_text_stream"
+            isinstance(record, dict)
+            and record.get("event") == "assistant_text_stream"
+            and record.get("evtType")
+            in ("text_start", "text_delta", "text_end", "commentary_update")
+        ):
+            yield record
+
+
+def stream_preview(
+    batch: bytes,
+    *,
+    session_id: str,
+    previous: str = "",
+    runtime_run_id: str | None = None,
+) -> str:
+    """Read only visible text events for this exact attributable runtime session."""
+
+    text = previous
+    for record in _visible_stream_records(batch):
+        if runtime_run_id is not None and record.get("runId") not in (
+            None,
+            runtime_run_id,
         ):
             continue
-        if record.get("evtType") not in {
-            "text_start",
-            "text_delta",
-            "text_end",
-            "commentary_update",
-        }:
+        # Native 2026.9.6 CLI frames omit sessionId. Only their matching
+        # executor-bound private run identity may substitute for that field.
+        if record.get("sessionId") != session_id and (
+            record.get("sessionId") is not None
+            or runtime_run_id is None
+            or record.get("runId") != runtime_run_id
+        ):
             continue
+        if record.get("evtType") == "text_start":
+            text = ""
         content = record.get("content")
         delta = record.get("delta")
         if isinstance(content, str) and content:

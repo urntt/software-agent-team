@@ -9,6 +9,7 @@ from software_agent_team.terminal_metrics import TerminalRunMetrics
 from software_agent_team.terminal_presentation import (
     display_text,
     invocation_preview,
+    native_stream_run_id,
     stream_preview,
     tool_preview,
 )
@@ -92,6 +93,39 @@ def test_stream_only_projects_current_session_visible_events_and_redacts(
         "sat_submit_artifact", {"artifact": "OPAQUE CONTENT"}, result="OPAQUE RESULT"
     )
     assert "OPAQUE" not in submission.model_dump_json()
+
+
+def test_native_frames_bind_private_run_id_without_session_id_and_reset_text() -> None:
+    def frame(kind, delta="", **metadata):
+        return {
+            "ts": "2026-09-30T00:00:00Z",
+            "event": "assistant_text_stream",
+            "runId": "native-current",
+            "evtType": kind,
+            "content": "",
+            "delta": delta,
+            **metadata,
+        }
+
+    records = [
+        frame("text_start"),
+        frame("text_delta", "visible "),
+        frame("text_delta", "WRONG RUN", runId="other-run"),
+        frame("text_delta", "WRONG SESSION", sessionId="other-session"),
+        {"event": "assistant_message_end", "rawThinking": "PRIVATE"},
+        frame("thinking_delta", "PRIVATE"),
+        frame("text_delta", "stream"),
+    ]
+    raw = "\n".join(json.dumps(record) for record in records).encode()
+    identity = native_stream_run_id(raw)
+    assert identity == "native-current"
+    assert stream_preview(raw, session_id="current") == ""
+    assert (
+        stream_preview(
+            raw, session_id="current", runtime_run_id=identity, previous="old request"
+        )
+        == "visible stream"
+    )
 
 
 def test_global_clock_updates_without_events_and_context_is_not_ledger_total() -> None:
