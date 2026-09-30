@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** September 30, 2026
+**Last reviewed:** September 29, 2026 (Pacific Time)
 
 This page records current implementation and validation facts. Product direction
 and experiments belong to [`VISION.md`](VISION.md); behavioral contracts and
@@ -101,6 +101,19 @@ establish the current release's provider-backed behavior.
   lint, and 1,987 tests on OVH, with one root-only cross-UID test skipped.
 
 ## Validation limits and open capabilities
+
+An independent review of `v0.5.5` identified open limits. An offline
+counterexample confirms that option descriptions whose raw length exceeds 300
+only because of surrounding whitespace still fail typed validation. Paid-call
+reservations estimate one provider request, while invocation settlement can
+aggregate multiple requests; the offline multi-request counterexample exceeds
+the reserved amount. Installation pins the top-level OpenClaw archive but does
+not freeze its transitive dependency tree, and the first uv installation uses
+a moving installer. Release setup and tests share the publication job's write
+permission. Delivery Git helpers also inherit ambient configuration that the
+workspace helper isolates; a harmless global fsmonitor fixture confirms that
+difference, without demonstrating a sandbox escape. These findings remain
+unfixed; the earlier gate does not cover the new counterexamples.
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
 and single-route delivery path. The `v0.5.5` canonical gate and pre-tag dev
