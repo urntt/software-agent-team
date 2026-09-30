@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** September 29, 2026
+**Last reviewed:** September 30, 2026
 
 This page records current implementation and validation facts. Product direction
 and experiments belong to [`VISION.md`](VISION.md); behavioral contracts and
@@ -9,32 +9,35 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.5.4`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.4),
-tagged at `d3ad2a7440ca4d148ecb31fbcbb628b1d4b4fd62`. Its exact-tag
+The latest published stable release is [`v0.5.5`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.5),
+tagged at `e9de2058b452b3397fa6f28f43aa41fc30d92ab5`. Its exact-tag
 GitHub gate passed and published release-bound `bootstrap.sh` and
 `sat-release.json` assets; the candidate passed the OVH canonical gate with
-1,994 tests passing and one root-only fixture skipped. A new ordinary account
-installed that public stable, completed first configuration and a subsequent
-startup self-check. Real DeepSeek Planning then returned a 333-character
-question-option description, exceeding its 300-character display limit. The
-targeted whole-question correction omitted the nested validation error, and
-the model resubmitted an overlong description. No proposal was approved or
-delivered. The account and owned resources were cleaned after screened evidence
-capture. The two Planning calls have recorded usage, but external billing is
-not independently known.
+1,995 tests passing and one root-only fixture skipped. The downloaded manifest
+matches the tagged source archive digest, and both asset hashes match their
+GitHub digests. A new ordinary account's pre-tag dev installation passed
+identity, no-op, first-start interruption, export, uninstall, and exact cleanup
+checks without provider calls. These checks do not establish a complete task.
 
-The `0.5.5` candidate in this checkout projects nested errors into authorized
+The `0.5.5` release projects nested errors into authorized
 parent correction slots and bounds only advisory option-description prose
 before strict validation, marking omitted text with an ellipsis. The raw
 submission and normalization remain in the turn; exact option IDs and product
 definition values are retained. The archived 333-character submission now
 validates as a three-option question with a 300-character description. The
-Planning and response-correction focused suite passed 293 tests. A new
-canonical gate and published ordinary-user validation remain outstanding.
+Planning and response-correction focused suite passed 293 tests. Published
+ordinary-user Planning, proposal approval, and delivery remain unvalidated.
+
+The preceding `v0.5.4` public installation completed first configuration and
+a subsequent self-check, but real DeepSeek Planning twice submitted an
+overlong question-option description. Its whole-question correction omitted
+the nested error, so no proposal was approved or delivered. The two calls have
+recorded usage; external billing is not independently known. The `0.5.5` fix
+addresses that captured shape but has not yet completed a provider-backed task.
 
 The earlier `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
 and 13/13 independent black-box checks. That historical success does not
-establish the current candidate's provider-backed behavior.
+establish the current release's provider-backed behavior.
 
 ## Implemented in the checkout
 
@@ -100,10 +103,9 @@ establish the current candidate's provider-backed behavior.
 ## Validation limits and open capabilities
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
-and single-route delivery path. The `v0.5.4` stable installation checks cover
-identity and lifecycle, while its first provider-backed task failed in Planning.
-The newer checkout fix has not yet completed a provider-backed task. None establishes a
-fresh WSL recovery run,
+and single-route delivery path. The `v0.5.5` canonical gate and pre-tag dev
+installation checks cover offline behavior and lifecycle; public task delivery
+remains unvalidated. None establishes a fresh WSL recovery run,
 rootless Docker without a host Docker group, every Gemini route, a live
 provider switch, manual slow-key terminal usability, or paths requiring a
 specific failure or later implementation iteration. Those conditions need
