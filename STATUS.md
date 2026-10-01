@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** September 30, 2026 (Pacific Time)
+**Last reviewed:** October 1, 2026 (Pacific Time)
 
 This page records current implementation and validation facts. Product direction
 and experiments belong to [`VISION.md`](VISION.md); behavioral contracts and
@@ -9,11 +9,11 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.1`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.1),
-tagged at `de836e26d355ff1214b1b42ad090a59b27d0d384`. Its read-only exact-tag
+The latest published stable release is [`v0.6.2`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.2),
+tagged at `f6fb340c55531ac7e02c75c38297caa773334f77`. Its read-only exact-tag
 gate and separate publisher succeeded. Both assets match their GitHub digests
-and the exact source archive. The hosted gate passed **2,027 tests** with four
-environment skips; the same clean source passed **2,030 tests** with one
+and the exact source archive. The hosted gate passed **2,040 tests** with four
+environment skips; the same clean source passed **2,043 tests** with one
 root-only skip on Linux with the actual sandbox image. All four stages and
 attributable process, temporary directory, lease, and Docker cleanup passed.
 
@@ -35,8 +35,23 @@ without model generation. Focused production-interface checks passed 322 cases.
 It also retains bounded, credential-redacted configuration failure paths and
 uses the readable standard Planning overview unless technical details are
 requested. Passing check evidence/rerun rules appear in detailed visibility.
-Public installation-to-browser-use validation of this version is in progress;
-publication and offline readiness alone do not establish delivery success.
+Its fresh public journey passed installation, first provider setup/check,
+subsequent startup and approval after ordinary task retries. The approved
+five-Agent runtime preflight passed. Implementation then ended after 86 tools
+and a successful terminal submission: SAT incorrectly treated a retained warning
+from an earlier failed process tool as a fatal post-submission error. There was
+no delivery or browser acceptance. Clarifier and Implementer SQLite snapshots
+were captured before successful export/uninstall and exact account cleanup.
+
+`v0.6.2` binds recognized historical tool warnings to the native successful
+completion, complete tool summary and attributed session's final successful
+submission receipt. Unknown errors, missing receipts, aborts and real terminal
+failures remain rejected. Focused production-interface checks passed 131 cases,
+including 13 real submission-plugin/adapter cases; a real pinned-runtime failed
+read followed by terminal submission passed against a local simulated provider.
+Fresh public installation, first checks and subsequent startup passed; the
+remaining provider-backed delivery, browser acceptance and lifecycle validation
+are in progress. Publication alone does not establish their success.
 
 ## Implemented in the checkout
 
