@@ -1,22 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.0",
-  "target_version": "0.6.1",
+  "baseline_version": "0.6.1",
+  "target_version": "0.6.2",
   "changes": [
     {
-      "id": "explicit-runtime-roster-ownership",
+      "id": "attributable-historical-tool-warnings",
       "impact": "patch",
-      "summary": "Declare explicit roster ownership and bind local model inspection to an existing Agent required by the pinned runtime"
-    },
-    {
-      "id": "actionable-configuration-preflight",
-      "impact": "patch",
-      "summary": "Retain redacted configuration validation paths in execution readiness checks"
-    },
-    {
-      "id": "readable-standard-planning-overview",
-      "impact": "patch",
-      "summary": "Keep technical traceability behind explicit detail selection and reduce passing self-check repetition"
+      "summary": "Keep attributable historical tool warnings diagnostic after a proven successful terminal artifact submission while rejecting unknown and terminal errors"
     }
   ]
 }

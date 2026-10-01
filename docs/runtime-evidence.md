@@ -732,6 +732,16 @@ terminal submission remain invalid; an invocation ending at a rejection does
 not qualify for paired-tool continuation. Historical records omit this new
 field and retain their canonical bytes.
 
+The pinned runner can emit an `isError` tool warning even after a successful
+terminal `sat_submit_artifact` receipt. Such a warning is diagnostic rather than
+an invocation failure only when the native completion and execution trace prove
+successful tool termination, the single recognized warning agrees with the
+native tool summary, and the attributed session proves matching historical
+failed calls strictly before its final accepted submission receipt. All original
+tool failures, stdout, usage and warning text remain available. Missing or
+mismatched receipts, unknown errors, aborts, provider failures and invocation
+timeouts still fail closed; a warning's prose never establishes completion.
+
 Artifact schema v9 added lifecycle-v3 evidence for the content-free
 pre-invocation initialization baseline. Artifact schema v8 added the `deferred` tool-call outcome for a valid async
 process start that has not reached a terminal result. Artifact schema v7 added

@@ -43,6 +43,7 @@ OPTIONAL_SCENARIOS = (
     "continuation",
     "correction",
     "submission-contract",
+    "tool-warning-submission",
 )
 _EXPECTED_TERMINAL = {
     "stream": ("completed", "completed"),
@@ -53,6 +54,7 @@ _EXPECTED_TERMINAL = {
     "continuation": ("completed", "completed"),
     "correction": ("completed", "completed"),
     "submission-contract": ("completed", "completed"),
+    "tool-warning-submission": ("completed", "completed"),
 }
 _TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
 _EXPECTED_RESPONSE = '{"status":"ok"}'
@@ -116,7 +118,7 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
         if exit_code != 0:
             mismatches.append(f"exit_code expected 0, got {exit_code!r}")
         if (
-            scenario != "submission-contract"
+            scenario not in {"submission-contract", "tool-warning-submission"}
             and outcome.get("response_text") != _EXPECTED_RESPONSE
         ):
             mismatches.append("completed response_text did not match the fixture")
@@ -211,7 +213,7 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
             mismatches.append("expected independent successful fixture read evidence")
         if requests_seen != 3:
             mismatches.append("expected rejection, read, and final response requests")
-    elif scenario == "submission-contract":
+    elif scenario in {"submission-contract", "tool-warning-submission"}:
         events = _sequence(outcome.get("server_events"))
         if not any(
             _mapping(item).get("kind") == "submission_contract"
@@ -223,6 +225,21 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
             mismatches.append("bound tool did not submit the semantic payload")
         if outcome.get("submission_evidence_status") != "accepted":
             mismatches.append("bound submission evidence was not accepted")
+        if scenario == "tool-warning-submission":
+            calls = _sequence(outcome.get("tool_calls"))
+            if len(calls) != 2 or (
+                _mapping(calls[0]).get("tool_name") != "read"
+                or _mapping(calls[0]).get("is_error") is not True
+                or _mapping(calls[1]).get("tool_name") != "sat_submit_artifact"
+                or _mapping(calls[1]).get("outcome") != "succeeded"
+            ):
+                mismatches.append(
+                    "historical failure and final receipt were not retained"
+                )
+            if requests_seen != 2:
+                mismatches.append(
+                    "expected failed read followed by terminal submission"
+                )
     elif scenario == "continuation":
         invocations = _sequence(outcome.get("invocations"))
         if len(invocations) != 2:
@@ -522,7 +539,10 @@ class ScenarioHandler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
 
-        if server.scenario == "submission-contract" and server.requests_seen == 1:
+        if (
+            server.scenario in {"submission-contract", "tool-warning-submission"}
+            and server.requests_seen == 1
+        ):
             names = [
                 _mapping(item.get("function")).get("name")
                 for item in _sequence(request.get("tools"))
@@ -562,6 +582,17 @@ class ScenarioHandler(BaseHTTPRequestHandler):
                 else ("read", {"path": "/agent/fixture.txt"})
             )
             self._send_tool_call(name, arguments)
+            return
+
+        if server.scenario == "tool-warning-submission":
+            if server.requests_seen == 1:
+                self._send_tool_call(
+                    "read", {"path": "/agent/absent-warning-fixture.txt"}
+                )
+            else:
+                self._send_tool_call(
+                    "sat_submit_artifact", {"artifact": {"status": "ok"}}
+                )
             return
 
         if server.scenario == "submission-contract" and server.requests_seen == 1:
@@ -791,6 +822,10 @@ def execute_scenario(
 
     with running_server(scenario) as server:
         payload = json.loads(config.read_text(encoding="utf-8"))
+        if scenario == "tool-warning-submission":
+            # The isolated fixture permits one real failed read before the
+            # terminal plugin. Production Planning permissions are unchanged.
+            payload["agents"]["entries"]["planner"]["tools"]["allow"].append("read")
         provider_name = MODEL.split("/", 1)[0]
         provider = payload["models"]["providers"][provider_name]
         provider["baseUrl"] = f"http://127.0.0.1:{server.server_port}/v1"
@@ -828,7 +863,7 @@ def execute_scenario(
                     },
                     purpose=AgentSubmissionPurpose.PLANNING_RESPONSE,
                 )
-                if scenario == "submission-contract"
+                if scenario in {"submission-contract", "tool-warning-submission"}
                 else None
             ),
         )

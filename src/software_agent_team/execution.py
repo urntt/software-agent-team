@@ -1084,6 +1084,7 @@ class _OpenClawResponse(BaseModel):
 
     visible_texts: tuple[str, ...]
     has_error_payload: bool = False
+    historical_tool_warning: tuple[str, int, int] | None = None
     provider_failed: bool = False
     declared_timeout: bool = False
     openclaw_run_id: str | None = None
@@ -1366,6 +1367,94 @@ def _parse_openclaw_provider_failure(
     )
 
 
+def _historical_tool_warning_summary(
+    meta: dict[str, object], payloads: list[object]
+) -> tuple[str, int, int] | None:
+    """Recognize the pinned runner's warning, never a terminal error by text alone."""
+
+    if meta.get("aborted") is not False or meta.get("error") is not None:
+        return None
+    if meta.get("stopReason") != "toolUse":
+        return None
+    completion = meta.get("completion")
+    if not isinstance(completion, dict) or completion != {
+        "stopReason": "toolUse",
+        "finishReason": "toolUse",
+    }:
+        return None
+    trace = meta.get("executionTrace")
+    if not isinstance(trace, dict) or trace.get("fallbackUsed") is not False:
+        return None
+    attempts = trace.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) != 1:
+        return None
+    if not isinstance(attempts[0], dict) or (
+        attempts[0].get("result") != "success"
+        or attempts[0].get("stage") != "assistant"
+    ):
+        return None
+    summary = meta.get("toolSummary")
+    if not isinstance(summary, dict):
+        return None
+    unresolved = summary.get("unresolvedError")
+    if not isinstance(unresolved, dict):
+        return None
+    name = unresolved.get("toolName")
+    labels = {
+        "process": "Process",
+        "exec": "Exec",
+        "read": "Read",
+        "write": "Write",
+        "edit": "Edit",
+    }
+    if not isinstance(name, str) or name not in labels:
+        return None
+    calls = _optional_nonnegative_int(summary.get("calls"))
+    failures = _optional_nonnegative_int(summary.get("failures"))
+    if calls is None or failures is None or not failures:
+        return None
+    # The pinned payload builder emits this warning only in the absence of a
+    # user-facing reply. Additional or unrecognized error payloads fail closed.
+    if len(payloads) != 1 or not isinstance(payloads[0], dict):
+        return None
+    warning = payloads[0]
+    if warning.get("isError") is not True:
+        return None
+    text = warning.get("text")
+    if not isinstance(text, str) or not re.match(
+        rf"^⚠️ (?:{labels[name]}|\*\*{labels[name]}\*\*) "
+        r"(?:failed|blocked|timed out)(?:[ (:.;]|$)",
+        text,
+    ):
+        return None
+    return name, calls, failures
+
+
+def _attributable_historical_tool_warning(
+    payload: _OpenClawResponse,
+    evidence: CapturedOpenClawToolEvidence | None,
+    submission: AgentSubmissionEvidence,
+) -> bool:
+    """Bind the SDK warning to failed tools strictly before the accepted receipt."""
+
+    if payload.historical_tool_warning is None or evidence is None:
+        return False
+    if evidence.terminal_state is not OpenClawInvocationTerminalState.TOOL_RESULT:
+        return False
+    name, count, failures = payload.historical_tool_warning
+    calls = evidence.tool_calls
+    failed = tuple(call for call in calls if call.is_error)
+    return (
+        len(calls) == count
+        and len(failed) == failures
+        and failed[-1].tool_name == name
+        and calls[-1].id == submission.tool_call_id
+        and calls[-1].outcome is AgentToolCallOutcome.SUCCEEDED
+        and calls[-1].submission_receipt is not None
+        and submission.status is AgentSubmissionStatus.ACCEPTED
+    )
+
+
 def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
     """Parse local or Gateway JSON emitted by ``openclaw agent --json``."""
 
@@ -1431,6 +1520,7 @@ def _parse_openclaw_payload(stdout: str) -> _OpenClawResponse:
     return _OpenClawResponse(
         visible_texts=tuple(visible),
         has_error_payload=has_error_payload,
+        historical_tool_warning=_historical_tool_warning_summary(meta, payloads),
         provider_failed=saw_provider_failure and not visible,
         declared_timeout=any(
             text.startswith(_OPENCLAW_TIMEOUT_PREFIX) for text in visible
@@ -3269,7 +3359,9 @@ class OpenClawSubprocessExecutor:
                     lifecycle=lifecycle,
                     reason=InvocationStopReason.INVALID_RESPONSE,
                 )
-            if payload.has_error_payload:
+            if payload.has_error_payload and not _attributable_historical_tool_warning(
+                payload, captured_tools, submission_evidence
+            ):
                 rejected = rejected_submission_evidence(
                     request.submission_contract,
                     binding_sha256=submission_binding_sha256,
