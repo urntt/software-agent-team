@@ -9,32 +9,34 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.0`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.0),
-tagged at `6aaba348be9e64f365be8efbc1b6c7ce88bba169`. The read-only exact-tag
-gate and separate publisher succeeded, and both release assets matched their
-GitHub digests and the tagged source archive. The hosted gate passed 2,023 tests
-with four environment skips; the same code passed 2,026 tests with one root-only
-skip on Linux with the actual sandbox image.
+The latest published stable release is [`v0.6.1`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.1),
+tagged at `de836e26d355ff1214b1b42ad090a59b27d0d384`. Its read-only exact-tag
+gate and separate publisher succeeded. Both assets match their GitHub digests
+and the exact source archive. The hosted gate passed **2,027 tests** with four
+environment skips; the same clean source passed **2,030 tests** with one
+root-only skip on Linux with the actual sandbox image. All four stages and
+attributable process, temporary directory, lease, and Docker cleanup passed.
 
-A new ordinary account completed public installation, first provider setup and
-check, subsequent startup, nine real DeepSeek Planning calls, and proposal
-approval. Execution readiness then blocked the team because the pinned runtime
-requires `agents.ownership="explicit"` for a multi-Agent roster. Single-Agent
-Planning did not exercise that requirement. No execution Agent, workspace, or
-product was delivered. Export and `sat uninstall` passed and the test account
-and attributable resources were cleaned. The Planning estimate was $0.039044;
-this is not an independently confirmed provider invoice.
+The previous `v0.6.0` ordinary-account journey completed public installation,
+first provider setup/check, subsequent startup, nine real DeepSeek Planning
+calls, and proposal approval. Execution readiness blocked its six-Agent roster:
+the pinned runtime requires explicit roster ownership and an explicit owner
+for local model inspection. No execution Agent, workspace, or product was
+delivered. Export and `sat uninstall` passed and the account and attributable
+resources were cleaned. The Planning estimate was $0.039044; this is not an
+independently confirmed provider invoice. The raw OpenClaw SQLite sessions
+were not separately captured before uninstall and are not recoverable; retained
+Planning turns and diagnostics do not substitute for those sessions.
 
-The `0.6.1` candidate declares explicit roster ownership, binds local catalog checks to
-an existing Agent, retains bounded and
-credential-redacted configuration validation paths in the execution self-check,
-and uses the readable standard Planning overview unless technical detail is
-requested. Passing check evidence references and rerun rules appear in detailed
-visibility. Focused production-interface tests passed 322 cases on Linux with
-the actual pinned runtime. Replaying the failed, approved six-Agent TeamPlan
-passed real configuration validation, local model/auth inspection, and the
-sandbox probe without model generation. Candidate full-gate validation and
-publication are still pending.
+`v0.6.1` declares explicit roster ownership and selects an existing roster Agent
+for read-only local model/auth inspection. The failed approved six-Agent
+TeamPlan now passes real configuration, model inspection, and sandbox probing
+without model generation. Focused production-interface checks passed 322 cases.
+It also retains bounded, credential-redacted configuration failure paths and
+uses the readable standard Planning overview unless technical details are
+requested. Passing check evidence/rerun rules appear in detailed visibility.
+Public installation-to-browser-use validation of this version is in progress;
+publication and offline readiness alone do not establish delivery success.
 
 ## Implemented in the checkout
 
