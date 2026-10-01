@@ -30,3 +30,7 @@ section's present owner.
 
 No implementation or acceptance claim is established merely by this index.
 Use the current status page and the cited topic contract for present behavior.
+
+The 199-line status immediately before the 0.6.6 completion update remains in
+Git at `d31e7b428f3bdd5f0c9cb557efa0a3c2acbe2edd:STATUS.md`, with SHA-256
+`798d9ca9f43dfe9ea27036d130d9f4d1efc1f93a412d8b2e0a1947bcc8f9e65c`. Its pending-publication and pending-journey statements describe that earlier snapshot.
