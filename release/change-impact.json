@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.3",
-  "target_version": "0.6.4",
+  "baseline_version": "0.6.4",
+  "target_version": "0.6.5",
   "changes": [
     {
-      "id": "release-impact-metadata",
+      "id": "managed-upgrade-referenced-image",
       "impact": "patch",
-      "summary": "Align the release impact baseline and target with immutable tags and package metadata after the prior manifest gate rejected publication"
+      "summary": "Defer no-force rollback-tag reclamation while sandbox containers reference the predecessor, retain the exact cleanup handoff, and preserve activation and rollback causes with a single transaction owner"
     }
   ]
 }

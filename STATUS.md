@@ -67,6 +67,16 @@ publication was rejected because its impact target was stale. The v0.6.4
 candidate corrects only release metadata and retains the tested execution code.
 Publication alone does not establish user-flow success.
 
+The checkout also repairs managed upgrade activation when a cached sandbox
+container still references the predecessor image. Its exact temporary rollback
+tag is retained in the pending handoff until no-force reclamation can complete.
+Activation rollback has one owner under the update lock and reports both causes
+when recovery fails. Focused managed-install/bootstrap/update checks passed 85 cases;
+canonical and public release validation for this change is pending;
+the public v0.6.4 update engine does not contain it. Rerunning the latest
+published installer refreshes the updater without deleting configuration or
+run history.
+
 ## Implemented in the checkout
 
 - The published `0.6.0` release also cleans advisory option whitespace before its shared

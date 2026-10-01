@@ -1687,9 +1687,13 @@ def test_failed_stage_anchors_previous_image_until_rollback(
     assert not tuple(install_paths.versions_root.iterdir())
 
 
+@pytest.mark.parametrize(
+    "outcome", ["success", "container_reference", "probe_failure", "rollback_failure"]
+)
 def test_successful_stage_releases_image_anchor_after_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
 ) -> None:
     repository, _ = prepare_repository(tmp_path)
     reference = "sat-python-quality:phase1-v8"
@@ -1706,6 +1710,8 @@ def test_successful_stage_releases_image_anchor_after_activation(
     candidate_id = "sha256:" + "b" * 64
     references = {reference: previous_id}
     retired: list[str] = []
+    container_references = {"present": outcome == "container_reference"}
+    restore_calls: list[str] = []
 
     def inspect(
         selector: str,
@@ -1731,11 +1737,35 @@ def test_successful_stage_releases_image_anchor_after_activation(
     ) -> subprocess.CompletedProcess[str]:
         if arguments[:2] == ("image", "tag"):
             image_id, destination = arguments[2:]
+            if destination == reference:
+                restore_calls.append(destination)
+                if outcome == "rollback_failure":
+                    raise ManagedInstallError("injected Docker rollback refusal")
             references[destination] = image_id
             return subprocess.CompletedProcess(arguments, 0, "", "")
         if arguments[:3] == ("image", "rm", "--no-prune"):
-            references.pop(arguments[3], None)
+            selector = arguments[3]
+            if (
+                container_references["present"]
+                and references.get(selector) == previous_id
+                and list(references.values()).count(previous_id) == 1
+            ):
+                return subprocess.CompletedProcess(
+                    arguments, 1, "", "container is using its referenced image"
+                )
+            references.pop(selector, None)
             return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:2] == ("image", "ls"):
+            return subprocess.CompletedProcess(
+                arguments, 0, "\n".join(set(references.values())), ""
+            )
+        if arguments[:2] == ("container", "ls"):
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                "owned-container\n" if container_references["present"] else "",
+                "",
+            )
         raise AssertionError(f"unexpected Docker command: {arguments}")
 
     def run(
@@ -1751,7 +1781,15 @@ def test_successful_stage_releases_image_anchor_after_activation(
                 and image_id == previous_id
                 for name, image_id in references.items()
             )
+            managed_install_module.prepare_staged_sandbox_image_transition(
+                application_root=cwd,
+                installation_record_path=install_paths.installation_record,
+            )
             references[reference] = candidate_id
+            managed_install_module.finalize_staged_sandbox_image_transition(
+                application_root=cwd,
+                installation_record_path=install_paths.installation_record,
+            )
             assert cwd is not None
             (cwd / ".sat").mkdir(exist_ok=True)
             engine = current_docker_engine()
@@ -1778,14 +1816,158 @@ def test_successful_stage_releases_image_anchor_after_activation(
         lambda image, **_kwargs: retired.append(image.image_id) or True,
     )
 
-    install_managed_target(
-        dev_target(repository, revision),
-        install_paths,
-        command_runner=run,
-    )
+    if outcome in {"probe_failure", "rollback_failure"}:
 
+        def reject_launcher(_paths: ManagedInstallPaths) -> None:
+            raise ManagedInstallError("injected final launcher failure")
+
+        monkeypatch.setattr(
+            managed_install_module, "_validate_active_application", reject_launcher
+        )
+        expected = "injected final launcher failure"
+        if outcome == "rollback_failure":
+            expected += r".*rollback also failed \(injected Docker rollback refusal\)"
+        with pytest.raises(ManagedInstallError, match=expected):
+            install_managed_target(
+                dev_target(repository, revision), install_paths, command_runner=run
+            )
+        assert restore_calls == [reference]
+        assert not install_paths.application_link.exists()
+        assert not install_paths.installation_record.exists()
+        if outcome == "probe_failure":
+            assert references == {reference: previous_id}
+        return
+
+    record = install_managed_target(
+        dev_target(repository, revision), install_paths, command_runner=run
+    )
+    assert (
+        install_paths.application_link.resolve()
+        == Path(record.application_path).resolve()
+    )
+    handoff_path = managed_install_module._sandbox_image_transition_path(
+        install_paths.managed_root, revision
+    )
+    handoff = managed_install_module._load_sandbox_image_transition(handoff_path)
+    assert handoff is not None
+    assert handoff.rollback_reference is not None
+    if outcome == "container_reference":
+        assert references[reference] == candidate_id
+        assert references[handoff.rollback_reference] == previous_id
+        assert retired == []
+        assert not managed_install_module.reconcile_pending_sandbox_image_transition(
+            install_paths.application_link.resolve()
+        )
+        assert handoff_path.exists()
+        container_references["present"] = False
+        assert managed_install_module.reconcile_pending_sandbox_image_transition(
+            install_paths.application_link.resolve()
+        )
+        assert not handoff_path.exists()
     assert references == {reference: candidate_id}
     assert retired == [previous_id]
+
+
+@pytest.mark.parametrize("failure", ["referenced", "unreferenced", "changed"])
+def test_rollback_tag_release_defers_only_an_unchanged_referenced_image(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    reference = "sat-python-quality:phase1-v10"
+    previous = managed_install_module.SandboxImageIdentity(
+        image_id="sha256:" + "a" * 64,
+        parent_image_id=None,
+        repository_tags=(),
+        owned=True,
+    )
+    candidate = previous.__class__(
+        image_id="sha256:" + "b" * 64,
+        parent_image_id=None,
+        repository_tags=(reference,),
+        owned=True,
+    )
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=previous,
+        previous_lineage=(previous,),
+        candidate=candidate,
+        candidate_lineage=(candidate,),
+        rollback_reference="software-agent-team-rollback:u1000-" + "c" * 32,
+    )
+    inspections = []
+
+    def inspect(selector: str, **_kwargs):
+        inspections.append(selector)
+        return candidate if failure == "changed" and len(inspections) > 1 else previous
+
+    commands = []
+
+    def docker(arguments, *, check):
+        commands.append(arguments)
+        assert check is False
+        assert arguments == ("image", "rm", "--no-prune", transition.rollback_reference)
+        return subprocess.CompletedProcess(arguments, 1, "", "Docker refused removal")
+
+    monkeypatch.setattr(managed_install_module, "_inspect_sandbox_image", inspect)
+    monkeypatch.setattr(managed_install_module, "_docker_command", docker)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_image_has_container_references",
+        lambda _image_id: failure == "referenced",
+    )
+    if failure == "referenced":
+        assert not managed_install_module._release_sandbox_image_rollback_reference(
+            transition
+        )
+    else:
+        message = (
+            "changed unexpectedly" if failure == "changed" else "could not be removed"
+        )
+        with pytest.raises(ManagedInstallError, match=message):
+            managed_install_module._release_sandbox_image_rollback_reference(transition)
+    assert len(commands) == 1
+
+
+def test_image_rollback_is_repeatable_after_its_anchor_was_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "sat-python-quality:phase1-v10"
+    previous = managed_install_module.SandboxImageIdentity(
+        image_id="sha256:" + "a" * 64,
+        parent_image_id=None,
+        repository_tags=(reference,),
+        owned=True,
+    )
+    candidate = previous.__class__(
+        image_id="sha256:" + "b" * 64,
+        parent_image_id=None,
+        repository_tags=(),
+        owned=True,
+    )
+    transition = managed_install_module.SandboxImageTransition(
+        reference=reference,
+        previous=previous,
+        previous_lineage=(previous,),
+        candidate=candidate,
+        candidate_lineage=(candidate,),
+        rollback_reference="software-agent-team-rollback:u1000-" + "c" * 32,
+    )
+
+    def inspect(selector: str, **_kwargs):
+        return previous if selector == reference else None
+
+    monkeypatch.setattr(managed_install_module, "_inspect_sandbox_image", inspect)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_docker_command",
+        lambda *_a, **_k: pytest.fail("already restored tag must not be mutated"),
+    )
+    monkeypatch.setattr(
+        managed_install_module,
+        "_remove_attributable_unreferenced_lineage",
+        lambda *_a, **_k: True,
+    )
+    managed_install_module._restore_sandbox_image_transition(transition)
+    managed_install_module._restore_sandbox_image_transition(transition)
 
 
 def test_staging_and_rollback_failure_reports_both_owned_causes(

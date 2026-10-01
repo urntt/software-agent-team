@@ -760,8 +760,14 @@ active predecessor and candidate image references independently before it
 changes Docker state. Before a staged installer may move an existing mutable
 image tag, the transaction pins the exact predecessor under a unique temporary
 local rollback reference. It removes that reference only after activation or
-rollback has settled. If staging and image rollback both fail, the installer
-reports both bounded install-owned causes. When both releases use one mutable
+rollback has settled. A cached sandbox container can prevent Docker from
+removing the last predecessor tag. This defers reclamation rather than failing
+a verified activation: the handoff retains the exact temporary reference and
+immutable image identity, and subsequent startup retries removal after those
+containers release the image. SAT never forces image deletion. Activation owns
+image rollback once under the update lock; if recovery also fails, diagnostics
+retain both bounded activation and rollback causes. If staging and image
+rollback both fail, the installer reports both bounded install-owned causes. When both releases use one mutable
 reference, it removes
 the superseded image only when both SAT labels match that reference and the
 exact image has neither a remaining tag nor a container reference. When the

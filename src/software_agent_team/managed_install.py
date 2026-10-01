@@ -499,6 +499,7 @@ class PersistedSandboxImageTransition(BaseModel):
     )
     target_source_revision: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
     previous_reference: str | None = Field(default=None, min_length=1, max_length=4_096)
+    rollback_reference: str | None = None
     reference: str = Field(min_length=1, max_length=4_096)
     previous: PersistedSandboxImageIdentity | None = None
     previous_lineage: tuple[PersistedSandboxImageIdentity, ...] = Field(
@@ -534,12 +535,29 @@ class PersistedSandboxImageTransition(BaseModel):
 
         return self.previous_reference or self.reference
 
+    @field_validator("rollback_reference")
+    @classmethod
+    def require_owned_rollback_reference(cls, value: str | None) -> str | None:
+        if (
+            value is not None
+            and re.fullmatch(
+                re.escape(SANDBOX_IMAGE_ROLLBACK_REPOSITORY)
+                + rf":u{os.geteuid()}-[0-9a-f]{{32}}",
+                value,
+            )
+            is None
+        ):
+            raise ValueError("sandbox rollback reference is invalid")
+        return value
+
     @model_validator(mode="after")
     def require_complete_captured_lineages(self) -> PersistedSandboxImageTransition:
         _require_persisted_lineage(self.previous, self.previous_lineage, "previous")
         _require_persisted_lineage(self.candidate, self.candidate_lineage, "candidate")
         if self.candidate is not None and not self.candidate.owned:
             raise ValueError("candidate sandbox image must be attributable to SAT")
+        if self.rollback_reference is not None and self.previous is None:
+            raise ValueError("sandbox rollback reference requires a previous image")
         roots = tuple(item.root.image_id for item in self.legacy_orphan_lineages)
         if len(roots) != len(set(roots)):
             raise ValueError("legacy sandbox roots must be unique")
@@ -815,6 +833,37 @@ def _stage_managed_target_locked(
                 rollback_reference=sandbox_image_rollback_reference,
             )
         _validate_staged_application(final_path, marker)
+        if sandbox_image_transition is not None:
+            handoff_path = _sandbox_image_transition_path(
+                paths.managed_root, marker.source_revision
+            )
+            handoff = _load_sandbox_image_transition(handoff_path)
+            if handoff is not None:
+                if (
+                    handoff.target_source_revision != marker.source_revision
+                    or handoff.reference != sandbox_image_transition.reference
+                    or handoff.candidate is None
+                    or handoff.candidate.image_id != candidate_image.image_id
+                    or (
+                        sandbox_image_rollback_reference is not None
+                        and (
+                            handoff.previous is None
+                            or previous_sandbox_image is None
+                            or handoff.previous.image_id
+                            != previous_sandbox_image.image_id
+                        )
+                    )
+                ):
+                    raise ManagedInstallError("staged sandbox image handoff changed")
+                _write_sandbox_image_transition(
+                    handoff_path,
+                    PersistedSandboxImageTransition.model_validate(
+                        {
+                            **handoff.model_dump(),
+                            "rollback_reference": sandbox_image_rollback_reference,
+                        }
+                    ),
+                )
         schema_support = target.schema_support or _read_staged_schema_support(
             final_path
         )
@@ -916,23 +965,13 @@ def activate_staged_application(
     if staged.docker_engine is not None:
         engine_scope.enter_context(bound_docker_engine(staged.docker_engine))
     try:
-        _require_managed_root(paths)
-        _validate_staged_application(staged.path, staged.marker)
-        if Path(staged.marker.application_link) != paths.application_link:
-            raise ManagedInstallError(
-                "staged application targets a different active link"
-            )
         with _exclusive_update_lock(paths):
-            return _activate_staged_application_locked(
+            return _activate_staged_application_transaction(
                 staged,
                 paths,
                 installed_at=installed_at,
                 fail_after_link_swap=fail_after_link_swap,
             )
-    except BaseException:
-        if staged.sandbox_image_transition is not None:
-            _restore_sandbox_image_transition(staged.sandbox_image_transition)
-        raise
     finally:
         engine_scope.close()
 
@@ -956,16 +995,10 @@ def install_managed_target(
         )
         with bound_docker_engine(staged.docker_engine):
             try:
-                return _activate_staged_application_locked(staged, paths)
+                return _activate_staged_application_transaction(staged, paths)
             except BaseException:
-                try:
-                    if staged.sandbox_image_transition is not None:
-                        _restore_sandbox_image_transition(
-                            staged.sandbox_image_transition
-                        )
-                finally:
-                    if staged.created_candidate:
-                        shutil.rmtree(staged.path, ignore_errors=True)
+                if staged.created_candidate:
+                    shutil.rmtree(staged.path, ignore_errors=True)
                 raise
 
 
@@ -1036,6 +1069,35 @@ def managed_foreground_task_lease(project_root: Path):
                 "managed application changed before task admission; rerun sat"
             )
         yield
+
+
+def _activate_staged_application_transaction(
+    staged: StagedApplication,
+    paths: ManagedInstallPaths,
+    *,
+    installed_at: datetime | None = None,
+    fail_after_link_swap: Callable[[], None] | None = None,
+) -> InstallationRecord:
+    """Own image rollback once, while the caller holds the update lock."""
+
+    try:
+        return _activate_staged_application_locked(
+            staged,
+            paths,
+            installed_at=installed_at,
+            fail_after_link_swap=fail_after_link_swap,
+        )
+    except BaseException as activation_error:
+        if staged.sandbox_image_transition is not None:
+            try:
+                _restore_sandbox_image_transition(staged.sandbox_image_transition)
+            except ManagedInstallError as restore_error:
+                raise ManagedInstallError(
+                    "managed activation failed "
+                    f"({_managed_failure_detail(activation_error)}); sandbox image "
+                    f"rollback also failed ({_managed_failure_detail(restore_error)})"
+                ) from activation_error
+        raise
 
 
 def _activate_staged_application_locked(
@@ -1118,27 +1180,18 @@ def _activate_staged_application_locked(
         save_installation_record(record, paths.installation_record)
         created_launchers = _activate_launchers(paths)
         _validate_active_application(paths)
-        if staged.sandbox_image_transition is not None:
+        if staged.sandbox_image_transition is not None and (
             _release_sandbox_image_rollback_reference(staged.sandbox_image_transition)
+        ):
             _cleanup_superseded_sandbox_image(staged.sandbox_image_transition)
         return record
     except BaseException:
-        image_restore_error: ManagedInstallError | None = None
-        if staged.sandbox_image_transition is not None:
-            try:
-                _restore_sandbox_image_transition(staged.sandbox_image_transition)
-            except ManagedInstallError as restore_error:
-                image_restore_error = restore_error
         for launcher in created_launchers:
             if launcher.is_symlink():
                 launcher.unlink()
         if switched:
             _restore_application_link(paths.application_link, previous_target)
         _restore_optional_bytes(paths.installation_record, previous_record)
-        if image_restore_error is not None:
-            raise ManagedInstallError(
-                "managed sandbox image rollback failed after activation error"
-            ) from image_restore_error
         raise
 
 
@@ -1793,6 +1846,19 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
             )
             previous_reference = transition.resolved_previous_reference
             complete = True
+            if transition.rollback_reference is not None:
+                released = _release_sandbox_image_rollback_reference(
+                    SandboxImageTransition(
+                        reference=previous_reference,
+                        previous=(None if previous is None else previous.to_runtime()),
+                        previous_lineage=(),
+                        candidate=candidate,
+                        candidate_lineage=(),
+                        rollback_reference=transition.rollback_reference,
+                    )
+                )
+                if not released:
+                    return False
             if previous is not None and previous.owned:
                 current_previous = _inspect_sandbox_image(
                     previous.image_id,
@@ -2335,18 +2401,18 @@ def _preserve_sandbox_image_for_rollback(
 
 def _release_sandbox_image_rollback_reference(
     transition: SandboxImageTransition,
-) -> None:
+) -> bool:
     """Remove only the temporary tag created by this image transaction."""
 
     rollback_reference = transition.rollback_reference
     if rollback_reference is None:
-        return
+        return True
     preserved = _inspect_sandbox_image(
         rollback_reference,
         expected_reference=transition.reference,
     )
     if preserved is None:
-        return
+        return True
     previous = transition.previous
     if previous is None or preserved.image_id != previous.image_id:
         raise ManagedInstallError(
@@ -2356,16 +2422,20 @@ def _release_sandbox_image_rollback_reference(
         ("image", "rm", "--no-prune", rollback_reference),
         check=False,
     )
-    if (
-        _inspect_sandbox_image(
-            rollback_reference,
-            expected_reference=transition.reference,
-        )
-        is not None
-    ):
+    remaining = _inspect_sandbox_image(
+        rollback_reference, expected_reference=transition.reference
+    )
+    if remaining is not None:
+        if remaining.image_id != previous.image_id:
+            raise ManagedInstallError(
+                "managed sandbox image rollback reference changed unexpectedly"
+            )
+        if _image_has_container_references(previous.image_id):
+            return False
         raise ManagedInstallError(
             "managed sandbox image rollback reference could not be removed"
         )
+    return True
 
 
 def _restore_sandbox_image_transition(
@@ -2376,9 +2446,13 @@ def _restore_sandbox_image_transition(
     current = _inspect_sandbox_image(transition.reference)
     previous = transition.previous
     if previous is not None:
-        preserved = _inspect_sandbox_image(
-            transition.rollback_reference or previous.image_id,
-            expected_reference=transition.reference,
+        preserved = (
+            current
+            if current is not None and current.image_id == previous.image_id
+            else _inspect_sandbox_image(
+                transition.rollback_reference or previous.image_id,
+                expected_reference=transition.reference,
+            )
         )
         if preserved is None or preserved.image_id != previous.image_id:
             raise ManagedInstallError(
