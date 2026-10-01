@@ -737,9 +737,12 @@ terminal `sat_submit_artifact` receipt. Such a warning is diagnostic rather than
 an invocation failure only when the native completion and execution trace prove
 successful tool termination, the single recognized warning agrees with the
 native tool summary, and the attributed session proves matching historical
-failed calls strictly before its final accepted submission receipt. All original
-tool failures, stdout, usage and warning text remain available. Missing or
-mismatched receipts, unknown errors, aborts, provider failures and invocation
+failed calls strictly before its final accepted submission receipt. The supported
+simple tool identifiers use the pinned runner's default display-title rule;
+this includes read-only `ls`, `find`, and `grep`, not just filesystem mutation
+or process tools. A different label or malformed tool identifier is rejected.
+All original tool failures, stdout, usage and warning text remain available.
+Missing or mismatched receipts, unknown errors, aborts, provider failures and invocation
 timeouts still fail closed; a warning's prose never establishes completion.
 
 Artifact schema v9 added lifecycle-v3 evidence for the content-free

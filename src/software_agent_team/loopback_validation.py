@@ -228,7 +228,7 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
         if scenario == "tool-warning-submission":
             calls = _sequence(outcome.get("tool_calls"))
             if len(calls) != 2 or (
-                _mapping(calls[0]).get("tool_name") != "read"
+                _mapping(calls[0]).get("tool_name") != "ls"
                 or _mapping(calls[0]).get("is_error") is not True
                 or _mapping(calls[1]).get("tool_name") != "sat_submit_artifact"
                 or _mapping(calls[1]).get("outcome") != "succeeded"
@@ -237,9 +237,7 @@ def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidati
                     "historical failure and final receipt were not retained"
                 )
             if requests_seen != 2:
-                mismatches.append(
-                    "expected failed read followed by terminal submission"
-                )
+                mismatches.append("expected failed ls followed by terminal submission")
     elif scenario == "continuation":
         invocations = _sequence(outcome.get("invocations"))
         if len(invocations) != 2:
@@ -586,9 +584,7 @@ class ScenarioHandler(BaseHTTPRequestHandler):
 
         if server.scenario == "tool-warning-submission":
             if server.requests_seen == 1:
-                self._send_tool_call(
-                    "read", {"path": "/agent/absent-warning-fixture.txt"}
-                )
+                self._send_tool_call("ls", {"path": "/agent/absent-warning-fixture"})
             else:
                 self._send_tool_call(
                     "sat_submit_artifact", {"artifact": {"status": "ok"}}
@@ -823,9 +819,9 @@ def execute_scenario(
     with running_server(scenario) as server:
         payload = json.loads(config.read_text(encoding="utf-8"))
         if scenario == "tool-warning-submission":
-            # The isolated fixture permits one real failed read before the
+            # The isolated fixture permits one real failed ls before the
             # terminal plugin. Production Planning permissions are unchanged.
-            payload["agents"]["entries"]["planner"]["tools"]["allow"].append("read")
+            payload["agents"]["entries"]["planner"]["tools"]["allow"].append("ls")
         provider_name = MODEL.split("/", 1)[0]
         provider = payload["models"]["providers"][provider_name]
         provider["baseUrl"] = f"http://127.0.0.1:{server.server_port}/v1"

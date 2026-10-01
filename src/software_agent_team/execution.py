@@ -1400,15 +1400,13 @@ def _historical_tool_warning_summary(
     if not isinstance(unresolved, dict):
         return None
     name = unresolved.get("toolName")
-    labels = {
-        "process": "Process",
-        "exec": "Exec",
-        "read": "Read",
-        "write": "Write",
-        "edit": "Edit",
-    }
-    if not isinstance(name, str) or name not in labels:
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         return None
+    # The pinned runner's defaultTitle capitalizes each underscore-separated
+    # word. Do not restrict historical failures to a partial tool allowlist:
+    # read-only tools such as ls/find/grep have the same warning semantics.
+    # Non-default SDK display labels remain unrecognized and fail closed.
+    label = " ".join(word[:1].upper() + word[1:] for word in name.split("_") if word)
     calls = _optional_nonnegative_int(summary.get("calls"))
     failures = _optional_nonnegative_int(summary.get("failures"))
     if calls is None or failures is None or not failures:
@@ -1422,7 +1420,7 @@ def _historical_tool_warning_summary(
         return None
     text = warning.get("text")
     if not isinstance(text, str) or not re.match(
-        rf"^⚠️ (?:{labels[name]}|\*\*{labels[name]}\*\*) "
+        rf"^⚠️ (?:{re.escape(label)}|\*\*{re.escape(label)}\*\*) "
         r"(?:failed|blocked|timed out)(?:[ (:.;]|$)",
         text,
     ):

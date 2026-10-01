@@ -32,11 +32,18 @@ ROOT = Path(__file__).resolve().parents[1]
     [
         "process",
         "read",
+        "ls",
+        "find",
+        "grep",
+        "apply_patch",
+        "ls_multiple_failures",
         "aborted",
         "provider_error",
         "unknown_payload",
         "extra_error",
         "wrong_tool",
+        "wrong_label",
+        "invalid_tool_name",
         "wrong_count",
         "wrong_failures",
         "failed_trace",
@@ -94,7 +101,10 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
             env=env,
         )
         plugin = json.loads(observed.stdout)
-        name = "read" if case == "read" else "process"
+        successes = {"process", "read", "ls", "find", "grep", "apply_patch"}
+        name = case if case in successes else "process"
+        if case == "ls_multiple_failures":
+            name = "ls"
         sid = "warning-session"
         aid = command[command.index("--agent") + 1]
         key = command[command.index("--session-key") + 1]
@@ -132,6 +142,22 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
             },
             *plugin["records"],
         ]
+        failures = 1
+        if case == "ls_multiple_failures":
+            # The saved real Tester shape had three failed reads followed by a
+            # failed ls. Native summary identifies the last failure, not all.
+            previous = []
+            for index in range(3):
+                call, reply = json.loads(json.dumps(records[2:4]))
+                call["message"]["content"][0].update(
+                    id=f"failed-read-{index}", name="read"
+                )
+                reply["message"].update(
+                    toolCallId=f"failed-read-{index}", toolName="read"
+                )
+                previous.extend((call, reply))
+            records[2:2] = previous
+            failures = 4
         if case == "missing_receipt":
             records.pop()
         elif case == "wrong_binding":
@@ -153,7 +179,10 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
             "".join(json.dumps(record) + "\n" for record in records)
         )
         (sessions / "sessions.json").write_text(json.dumps({key: {"sessionId": sid}}))
-        warning = "⚠️ Read failed" if case == "read" else "⚠️ Process failed (timed out)."
+        label = " ".join(word.capitalize() for word in name.split("_"))
+        warning = f"⚠️ {label} failed"
+        if name == "process":
+            warning += " (timed out)."
         response = {
             "payloads": [{"text": warning, "isError": True}],
             "meta": {
@@ -167,8 +196,8 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
                 "stopReason": "toolUse",
                 "completion": {"stopReason": "toolUse", "finishReason": "toolUse"},
                 "toolSummary": {
-                    "calls": 2,
-                    "failures": 1,
+                    "calls": failures + 1,
+                    "failures": failures,
                     "unresolvedError": {"toolName": name},
                 },
                 "executionTrace": {
@@ -189,6 +218,10 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
             )
         elif case == "wrong_tool":
             response["meta"]["toolSummary"]["unresolvedError"]["toolName"] = "read"
+        elif case == "wrong_label":
+            response["payloads"][0]["text"] = "⚠️ Ls failed"
+        elif case == "invalid_tool_name":
+            response["meta"]["toolSummary"]["unresolvedError"]["toolName"] = "ls\n"
         elif case == "wrong_count":
             response["meta"]["toolSummary"]["calls"] = 3
         elif case == "wrong_failures":
@@ -202,7 +235,15 @@ def test_historical_tool_warning_requires_native_and_session_provenance(
         runner=runner,
         environment={"OPENCLAW_STATE_DIR": str(state)},
     ).execute(request)
-    success = case in {"process", "read"}
+    success = case in {
+        "process",
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "apply_patch",
+        "ls_multiple_failures",
+    }
     assert result.status is (
         AgentExecutionStatus.COMPLETED
         if success

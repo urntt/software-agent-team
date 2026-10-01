@@ -50,8 +50,11 @@ failures remain rejected. Focused production-interface checks passed 131 cases,
 including 13 real submission-plugin/adapter cases; a real pinned-runtime failed
 read followed by terminal submission passed against a local simulated provider.
 Fresh public installation, first checks and subsequent startup passed; the
-remaining provider-backed delivery, browser acceptance and lifecycle validation
-are in progress. Publication alone does not establish their success.
+provider-backed task exposed a further historical `ls` warning after a valid
+Tester submission. There has been no successful delivery or browser acceptance
+on this release. The checkout derives default warning labels for simple tool
+identifiers rather than using a partial tool list; the native/session/receipt
+checks remain unchanged. Publication alone does not establish user-flow success.
 
 ## Implemented in the checkout
 
