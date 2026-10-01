@@ -54,7 +54,10 @@ provider-backed task exposed a further historical `ls` warning after a valid
 Tester submission. There has been no successful delivery or browser acceptance
 on this release. The checkout derives default warning labels for simple tool
 identifiers rather than using a partial tool list; the native/session/receipt
-checks remain unchanged. Publication alone does not establish user-flow success.
+checks remain unchanged. The immutable v0.6.3 tag passed canonical tests but
+publication was rejected because its impact target was stale. The v0.6.4
+candidate corrects only release metadata and retains the tested execution code.
+Publication alone does not establish user-flow success.
 
 ## Implemented in the checkout
 

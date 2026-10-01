@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.1",
-  "target_version": "0.6.2",
+  "baseline_version": "0.6.3",
+  "target_version": "0.6.4",
   "changes": [
     {
-      "id": "attributable-historical-tool-warnings",
+      "id": "release-impact-metadata",
       "impact": "patch",
-      "summary": "Keep attributable historical tool warnings diagnostic after a proven successful terminal artifact submission while rejecting unknown and terminal errors"
+      "summary": "Align the release impact baseline and target with immutable tags and package metadata after the prior manifest gate rejected publication"
     }
   ]
 }
