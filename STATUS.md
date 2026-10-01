@@ -9,13 +9,21 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.2`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.2),
-tagged at `f6fb340c55531ac7e02c75c38297caa773334f77`. Its read-only exact-tag
-gate and separate publisher succeeded. Both assets match their GitHub digests
-and the exact source archive. The hosted gate passed **2,040 tests** with four
-environment skips; the same clean source passed **2,043 tests** with one
-root-only skip on Linux with the actual sandbox image. All four stages and
-attributable process, temporary directory, lease, and Docker cleanup passed.
+The latest published stable release is [`v0.6.4`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.4),
+tagged at `61a9ecf8a7aa5f19ced28b8466d801f865ccff42`. Its read-only exact-tag
+gate and separate publisher succeeded. Both official assets match their GitHub
+digests and the exact source archive. The hosted gate passed **2,047 tests**
+with four environment skips, all four stages and attributable cleanup passed.
+The same execution code at `83e14e5` passed **2,050 tests** with one root-only
+skip on Linux with the actual sandbox image; its only later changes were
+release metadata, package version and status documentation. That earlier gate
+is not presented as an exact-revision result for the new tag.
+
+The immutable `v0.6.3` tag passed canonical checks, but its manifest gate
+rejected stale change-impact metadata. It was never published. The metadata
+was corrected for `v0.6.4` before its successful normal publication. The retained
+ordinary account is updating from public `v0.6.2` to `v0.6.4`; user delivery,
+independent browser acceptance and final export/uninstall are still pending.
 
 The previous `v0.6.0` ordinary-account journey completed public installation,
 first provider setup/check, subsequent startup, nine real DeepSeek Planning
