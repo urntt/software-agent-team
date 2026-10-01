@@ -467,6 +467,25 @@ def test_plan_execution_covers_every_route_agent_runtime_and_delivery_boundary(
     assert statuses["runtime.plan"] is SelfCheckStatus.BLOCKED
     assert statuses["route.default"] is SelfCheckStatus.BLOCKED
 
+    invalid_runtime = runtime_preflight().model_copy(
+        update={
+            "config_valid": False,
+            "config_error": "agents.ownership: explicit roster required",
+        }
+    )
+    rejected = build_plan_execution_report(
+        admission_report=admission,
+        team_plan=team_plan(),
+        runtime_preflight=invalid_runtime,
+        source_repository=source,
+        destination=tmp_path / "link-checker",
+        checked_at=NOW,
+    )
+    runtime_check = next(c for c in rejected.checks if c.id == "runtime.plan")
+    assert runtime_check.status is SelfCheckStatus.BLOCKED
+    assert "agents.ownership" in runtime_check.observed_fact
+    assert "explicit roster required" in runtime_check.observed_fact
+
 
 def test_plan_execution_blocks_missing_specialization_prompt_modules(
     tmp_path: Path,

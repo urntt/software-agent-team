@@ -9,39 +9,36 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.5.5`](https://github.com/urntt/software-agent-team/releases/tag/v0.5.5),
-tagged at `e9de2058b452b3397fa6f28f43aa41fc30d92ab5`. Its exact-tag
-GitHub gate passed and published release-bound `bootstrap.sh` and
-`sat-release.json` assets; the candidate passed the OVH canonical gate with
-1,995 tests passing and one root-only fixture skipped. The downloaded manifest
-matches the tagged source archive digest, and both asset hashes match their
-GitHub digests. A new ordinary account's pre-tag dev installation passed
-identity, no-op, first-start interruption, export, uninstall, and exact cleanup
-checks without provider calls. These checks do not establish a complete task.
+The latest published stable release is [`v0.6.0`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.0),
+tagged at `6aaba348be9e64f365be8efbc1b6c7ce88bba169`. The read-only exact-tag
+gate and separate publisher succeeded, and both release assets matched their
+GitHub digests and the tagged source archive. The hosted gate passed 2,023 tests
+with four environment skips; the same code passed 2,026 tests with one root-only
+skip on Linux with the actual sandbox image.
 
-The `0.5.5` release projects nested errors into authorized
-parent correction slots and bounds only advisory option-description prose
-before strict validation, marking omitted text with an ellipsis. The raw
-submission and normalization remain in the turn; exact option IDs and product
-definition values are retained. The archived 333-character submission now
-validates as a three-option question with a 300-character description. The
-Planning and response-correction focused suite passed 293 tests. Published
-ordinary-user Planning, proposal approval, and delivery remain unvalidated.
+A new ordinary account completed public installation, first provider setup and
+check, subsequent startup, nine real DeepSeek Planning calls, and proposal
+approval. Execution readiness then blocked the team because the pinned runtime
+requires `agents.ownership="explicit"` for a multi-Agent roster. Single-Agent
+Planning did not exercise that requirement. No execution Agent, workspace, or
+product was delivered. Export and `sat uninstall` passed and the test account
+and attributable resources were cleaned. The Planning estimate was $0.039044;
+this is not an independently confirmed provider invoice.
 
-The preceding `v0.5.4` public installation completed first configuration and
-a subsequent self-check, but real DeepSeek Planning twice submitted an
-overlong question-option description. Its whole-question correction omitted
-the nested error, so no proposal was approved or delivered. The two calls have
-recorded usage; external billing is not independently known. The `0.5.5` fix
-addresses that captured shape but has not yet completed a provider-backed task.
-
-The earlier `v0.5.1` release completed a DeepSeek/Linux ordinary-user delivery
-and 13/13 independent black-box checks. That historical success does not
-establish the current release's provider-backed behavior.
+The `0.6.1` candidate declares explicit roster ownership, binds local catalog checks to
+an existing Agent, retains bounded and
+credential-redacted configuration validation paths in the execution self-check,
+and uses the readable standard Planning overview unless technical detail is
+requested. Passing check evidence references and rerun rules appear in detailed
+visibility. Focused production-interface tests passed 322 cases on Linux with
+the actual pinned runtime. Replaying the failed, approved six-Agent TeamPlan
+passed real configuration validation, local model/auth inspection, and the
+sandbox probe without model generation. Candidate full-gate validation and
+publication are still pending.
 
 ## Implemented in the checkout
 
-- The `0.6.0` candidate also cleans advisory option whitespace before its shared
+- The published `0.6.0` release also cleans advisory option whitespace before its shared
   length bound, reserves the remaining authorization for each paid invocation,
   waits for temporary reservations and refuses insufficient known request
   headroom, freezes the npm tree with an empty lifecycle allowlist, and verifies
@@ -55,22 +52,22 @@ establish the current release's provider-backed behavior.
   passed the canonical gate with **2,026 tests passing**, one root-only fixture
   skipped, and successful doctor, formatting, and lint stages. Stage processes,
   temporary directories, leases, and attributable Docker resources were clean
-  afterward. Publication and the ordinary-user journey remain pending; the
-  published release is still `0.5.5`. ARM64/WSL installation and optional native
+  afterward. The public `0.6.0` lifecycle passed through
+  approval and was then blocked by the roster contract described above. ARM64/WSL installation and optional native
   OpenClaw integrations are not established by these Linux x86_64 checks.
 - The checkout adds `sat uninstall`, persistent shared Planning/execution
   controls with completion and multiline editing, journey-wide visibility,
   read-only elapsed/budget/context/Git telemetry, and bounded visible tool/model
-  previews. These changes are not in the published `v0.5.5` release. A clean
+  previews. These changes are in the published `v0.6.0` release. A clean
   non-root Linux canonical gate on `cefc8e7438cf6906c05128f7458f4e20a26d476b`
   passed **2,009 tests**, with one cross-UID fixture skipped because it requires
   root; doctor, formatting, and lint also passed. Both production-executor
   transport scenarios passed with pinned OpenClaw `2026.9.6` and a localhost
   HTTP fixture; attributable previews included visible streaming text,
   current-request context, and tools. This does not establish real provider
-  behavior. No provider-backed or complete ordinary-user journey was started
-  for this batch. WSL visual usability and published lifecycle validation
-  remain pending. See the
+  behavior. The later public DeepSeek journey reached approval and the
+  execution-readiness failure recorded above. Export/uninstall passed; WSL
+  visual usability and successful team delivery remain pending. See the
   [terminal contract](docs/terminal-interface.md).
 - The normal `sat` journey checks the local runtime, configures an isolated
   provider profile, captures a plain-language request, clarifies material user

@@ -386,7 +386,7 @@ def test_renderer_keeps_compact_output_actionable_and_detailed_output_complete()
     assert "Consequence:" in compact
     assert "Action:" in compact
     assert "task.request" in standard
-    assert "Re-run:" in standard
+    assert "Re-run:" not in standard
     assert "model.context" in standard
     assert "task.request" in detailed
     assert "Re-run:" in detailed

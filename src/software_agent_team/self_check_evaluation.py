@@ -828,6 +828,11 @@ def build_plan_execution_report(
             f"config={runtime_preflight.config_valid}; "
             f"image={runtime_preflight.sandbox_image_present}; "
             f"container={runtime_preflight.sandbox_container_ready}"
+            + (
+                f"; {runtime_preflight.config_error}"
+                if runtime_preflight.config_error
+                else ""
+            )
         )
     )
     checks.append(

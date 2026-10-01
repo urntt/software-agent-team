@@ -84,3 +84,10 @@ It stores attributable state transitions, counters, and evidence references,
 not a capture of terminal repaint sequences or detailed content previews.
 Terminal capture tools record repaints and can produce much larger files;
 use the run's journal and report for structured diagnostics.
+
+The default `standard` Planning overview uses the readable approval projection.
+Choose `d` to expand technical plan identities, permissions, provenance, and DAG
+traceability, or select `detailed` visibility to show them initially. Passing
+startup and task checks show their facts in `standard`; evidence references and
+rerun rules for passing checks appear in `detailed`. Blocked checks always retain
+an actionable cause and remediation at every visibility level.

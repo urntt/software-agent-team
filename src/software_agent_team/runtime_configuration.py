@@ -51,6 +51,7 @@ from software_agent_team.teams import (
     TeamManifest,
     TeamPlan,
 )
+from software_agent_team.terminal_presentation import display_text
 
 
 class RuntimeConfigurationError(ValueError):
@@ -196,6 +197,7 @@ class RuntimePreflight(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
     )
     config_valid: bool
+    config_error: str | None = Field(default=None, min_length=1, max_length=1000)
     sandbox_image_present: bool
     sandbox_container_ready: bool
     sandbox_container_error: str | None = Field(default=None, max_length=1000)
@@ -503,13 +505,30 @@ def inspect_openclaw_model(
         raise RuntimeConfigurationError("SAT OpenClaw state directory is unavailable")
 
     try:
+        configured = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        configured = None
+    argv = [str(openclaw_binary), "models", "list", "--json"]
+    agents = configured.get("agents") if isinstance(configured, dict) else None
+    entries = agents.get("entries") if isinstance(agents, dict) else None
+    if isinstance(entries, dict) and entries:
+        # Catalog/auth inspection needs an explicit existing roster owner.
+        # Unassigned approved fallback routes share that owner's local catalog;
+        # this read-only choice does not reassign tasks or change any model.
+        owner = next(
+            (
+                agent_id
+                for agent_id, agent in entries.items()
+                if isinstance(agent, dict)
+                and isinstance(agent.get("model"), dict)
+                and agent["model"].get("primary") == normalized
+            ),
+            next(iter(entries)),
+        )
+        argv.extend(("--agent", owner))
+    try:
         result = subprocess.run(
-            [
-                str(openclaw_binary),
-                "models",
-                "list",
-                "--json",
-            ],
+            argv,
             check=False,
             capture_output=True,
             text=True,
@@ -647,10 +666,6 @@ def inspect_openclaw_model(
             if input_price >= 0 and output_price >= 0:
                 discovered_prices = (input_price, output_price)
     provider_timeout: int | None = None
-    try:
-        configured = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        configured = None
     if isinstance(configured, dict):
         models = configured.get("models")
         providers = models.get("providers") if isinstance(models, dict) else None
@@ -1324,6 +1339,8 @@ def materialize_run_configuration(
     # retaining the pinned runtime's detector set and threshold authority.
     tools["loopDetection"] = {"enabled": True}
     agents = payload["agents"]
+    # SAT owns the complete roster; the pinned runtime must not infer a default.
+    agents["ownership"] = "explicit"
     for template_agent in agents["list"]:
         template_agent.get("tools", {}).pop("loopDetection", None)
     defaults = agents["defaults"]
@@ -1455,7 +1472,6 @@ def materialize_run_configuration(
             )
         agent = json.loads(json.dumps(template))
         agent["workspace"] = str(resolved_workspace)
-        agent["default"] = True
         agent["tools"] = {"allow": [ARTIFACT_SUBMISSION_TOOL]}
         sandbox_config = agent.setdefault("sandbox", {})
         sandbox_config["workspaceAccess"] = "ro"
@@ -1468,7 +1484,7 @@ def materialize_run_configuration(
     else:
         templates = {agent["id"]: agent for agent in agents["list"]}
         dynamic_agents: list[dict[str, Any]] = []
-        for index, spec in enumerate(team_plan.agents):
+        for spec in team_plan.agents:
             template_role = _CAPABILITY_TEMPLATE_ROLES[spec.capability]
             template = templates.get(template_role)
             if not isinstance(template, dict):
@@ -1480,8 +1496,6 @@ def materialize_run_configuration(
             agent["name"] = spec.label
             agent["workspace"] = str(resolved_workspace)
             agent.pop("default", None)
-            if index == 0:
-                agent["default"] = True
             sandbox_config = agent.setdefault("sandbox", {})
             sandbox_config["workspaceAccess"] = (
                 "ro" if spec.permission_profile is PermissionProfile.READ_ONLY else "rw"
@@ -1543,6 +1557,26 @@ def _run_openclaw_preflight_command(
         raise RuntimeConfigurationError(
             f"{label} failed ({type(error).__name__})"
         ) from error
+
+
+def _config_validation_error(stdout: str, stderr: str, returncode: int) -> str:
+    """Preserve bounded runtime validation paths without leaking credentials."""
+
+    messages: list[str] = []
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("issues"), list):
+        for issue in payload["issues"][:8]:
+            if isinstance(issue, dict):
+                path, message = issue.get("path"), issue.get("message")
+                if isinstance(path, str) and isinstance(message, str):
+                    messages.append(f"{path}: {message}")
+    detail = display_text("; ".join(messages) or stderr or stdout, limit=900)
+    return f"OpenClaw configuration validation exited {returncode}" + (
+        f": {detail}" if detail else ""
+    )
 
 
 def inspect_runtime_preflight(
@@ -1673,6 +1707,13 @@ def inspect_runtime_preflight(
         sandbox_image=sandbox.sandbox_image,
         sandbox_image_id=sandbox.sandbox_image_id,
         config_valid=config.returncode == 0,
+        config_error=(
+            None
+            if config.returncode == 0
+            else _config_validation_error(
+                config.stdout, config.stderr, config.returncode
+            )
+        ),
         sandbox_image_present=sandbox.sandbox_image_present,
         sandbox_container_ready=sandbox_container_ready,
         sandbox_container_error=sandbox_container_error,

@@ -228,7 +228,7 @@ def test_planning_overview_separates_constraint_authority_without_losing_data() 
     assert "Failure and delivery boundary:" in overview
 
 
-def test_compact_planning_overview_is_summary_and_compact_keeps_full_plan() -> None:
+def test_readable_overviews_keep_full_traceability_in_explicit_details() -> None:
     preview = preview_adaptive_proposal(
         request(),
         proposal(body=proposal_body()),
@@ -255,8 +255,11 @@ def test_compact_planning_overview_is_summary_and_compact_keeps_full_plan() -> N
     assert "authorized fallback profiles:" in detailed
 
     standard = render_planning_overview(preview, visibility="standard")
-    assert "Requirement-to-evidence traceability:" in standard
-    assert "authorized fallback profiles:" in standard
+    assert "What the team will build:" in standard
+    assert "Acceptance checks:" in standard
+    assert "Technical details: hidden" in standard
+    assert "Requirement-to-evidence traceability:" not in standard
+    assert "authorized fallback profiles:" not in standard
 
 
 def test_writer_responsibility_uses_owned_tasks_not_role_prose() -> None:
@@ -12249,8 +12252,10 @@ def test_cancellation_stops_before_a_proposal_or_approval(tmp_path: Path) -> Non
     assert session.latest_proposal_revision is None
 
 
+@pytest.mark.parametrize("visibility", ["compact", "standard"])
 def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
     tmp_path: Path,
+    visibility: str,
 ) -> None:
     planning_request = request(source_request=AMBIGUOUS_LINK_REQUEST)
     answered_body = proposal_body(question_id="link_scope")
@@ -12299,7 +12304,7 @@ def test_ordinary_user_can_answer_revise_edit_and_approve_without_json(
         planning_request,
         read=read,
         write=output.append,
-        progress_visibility="compact",
+        progress_visibility=visibility,
     )
 
     assert approved is not None

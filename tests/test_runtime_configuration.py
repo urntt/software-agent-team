@@ -2003,3 +2003,85 @@ def test_materialization_rejects_missing_resource_limits(
             sandbox_user="1000:1000",
             **overrides,
         )
+
+
+@pytest.mark.parametrize("bootstrap", [True, False])
+def test_materialized_roster_passes_real_pinned_config_validation(
+    tmp_path: Path, bootstrap: bool
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = tmp_path / "openclaw-state"
+    state.mkdir()
+    destination = tmp_path / "runtime.json"
+    materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        destination,
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        bootstrap_capability=AgentCapability.CLARIFICATION if bootstrap else None,
+        team_plan=None if bootstrap else adaptive_team_plan(),
+    )
+    binary = pinned_openclaw_binary(REPOSITORY_ROOT)
+    environment = runtime_configuration.isolated_openclaw_environment(
+        state_dir=state, config_path=destination
+    )
+    completed = subprocess.run(
+        [str(binary), "config", "validate", "--json"],
+        env={**os.environ, **environment},
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert json.loads(completed.stdout)["valid"] is True
+    inspection = inspect_openclaw_model(
+        openclaw_binary=binary,
+        openclaw_state_dir=state,
+        config_path=destination,
+        model="provider/model",
+    )
+    # This deliberately unknown model is rejected after successful local
+    # inspection, rather than failing because the roster has no owner.
+    assert not inspection.available
+    assert inspection.error == (
+        "OpenClaw does not recognize the configured model: provider/model"
+    )
+    if not bootstrap:
+        payload = json.loads(destination.read_text())
+        del payload["agents"]["ownership"]
+        destination.write_text(json.dumps(payload))
+        rejected = subprocess.run(
+            [str(binary), "config", "validate", "--json"],
+            env={**os.environ, **environment},
+            text=True,
+            capture_output=True,
+            timeout=90,
+        )
+        assert rejected.returncode != 0
+        assert "agents.ownership" in rejected.stdout
+
+
+def test_configuration_failure_keeps_redacted_bounded_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "unstructured-example-provider-key"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+    raw = json.dumps(
+        {
+            "issues": [
+                {
+                    "path": "agents.ownership",
+                    "message": "explicit roster required: " + secret,
+                }
+            ]
+        }
+    )
+    detail = runtime_configuration._config_validation_error(raw, "", 1)
+    assert "agents.ownership" in detail and "explicit roster required" in detail
+    assert secret not in detail and "[redacted]" in detail
+    assert (
+        len(runtime_configuration._config_validation_error("x" * 4000, "", 1)) <= 1000
+    )

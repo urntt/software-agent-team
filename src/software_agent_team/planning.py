@@ -9772,7 +9772,7 @@ def render_planning_overview(
 ) -> str:
     """Render task authority, with lossless fixed-policy details on request."""
 
-    if visibility == "compact":
+    if visibility in {"compact", "standard"}:
         return _render_concise_planning_overview(
             preview,
             budget_usage=budget_usage,
@@ -12693,7 +12693,7 @@ def _run_interactive_planning(
         return None
 
     show_fixed_policy = False
-    show_technical_details = progress.visibility is not RunEventVisibility.COMPACT
+    show_technical_details = progress.visibility is RunEventVisibility.DETAILED
     while True:
         preview = coordinator.preview(request, proposal)
         write("")

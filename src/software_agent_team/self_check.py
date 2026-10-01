@@ -708,7 +708,7 @@ def render_self_check_report(
                 f"  Evidence: {', '.join(item.reference for item in check.evidence)}"
             )
             lines.append(f"  Action: {check.remediation}")
-        elif visibility != "compact":
+        elif visibility == "detailed":
             lines.append(
                 f"  Evidence: {', '.join(item.reference for item in check.evidence)}"
             )

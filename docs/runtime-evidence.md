@@ -1677,3 +1677,18 @@ an auditable candidate delivery, not authorization for an external side effect.
 For the procedure that verifies these boundaries in a controlled
 provider-backed evaluation, use
 [`phase1-runbook.md`](phase1-runbook.md).
+
+
+The materialized OpenClaw roster explicitly declares SAT's ownership with
+`agents.ownership = "explicit"`, including dynamic teams and single-Agent
+Planning configurations. The pinned runtime validates this complete roster;
+bootstrap-only validation does not establish multi-Agent compatibility. A failed
+configuration preflight retains a bounded, credential-redacted `config_error`
+from the runtime's validation paths and projects it into the task self-check.
+The Controller continues to block workspace creation when configuration fails.
+
+Local model catalog/auth checks also pass an explicit existing roster owner via
+`models list --agent <id>`. They choose an Agent bound to the inspected primary
+model, or an existing roster Agent for an approved, unassigned fallback route.
+This read-only catalog context does not reassign tasks or create an ambient
+execution/heartbeat owner. No model generation is performed by these checks.
