@@ -19,6 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.docker_engine import DockerEngineIdentity
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.schema_compatibility import SchemaSupport
 
 DISTRIBUTION_NAME = "software-agent-team"
@@ -450,7 +451,8 @@ def _inspect_git_identity(project_root: Path) -> tuple[str, bool] | None:
 
 def _run_git(project_root: Path, *arguments: str) -> str:
     completed = subprocess.run(
-        ["git", "-C", str(project_root), *arguments],
+        git_command(["-C", str(project_root), *arguments]),
+        env=git_environment(project_root),
         check=True,
         capture_output=True,
         text=True,

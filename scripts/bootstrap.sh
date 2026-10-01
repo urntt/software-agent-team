@@ -90,10 +90,8 @@ else
 fi
 
 if [[ ! -x "$task_uv_bin" ]]; then
-  if ! curl -LsSf --proto '=https' --tlsv1.2 https://astral.sh/uv/install.sh | \
-      env UV_INSTALL_DIR="$HOME/.local/bin" sh; then
-    fail "could not install uv; check HTTPS and proxy access"
-  fi
+  bash "$task_temporary/helper/scripts/install-uv.sh" "$task_uv_bin" || \
+    fail "could not prepare uv; check the verified download diagnostic above"
 fi
 [[ -x "$task_uv_bin" ]] || fail "uv is unavailable after bootstrap"
 

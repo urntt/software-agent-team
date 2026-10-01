@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from software_agent_team.git_policy import git_command, git_environment
 
 
 class SeedRepositoryError(RuntimeError):
@@ -29,11 +30,9 @@ SEED_IGNORE_PATTERNS = (
 )
 
 
-def _git_environment() -> dict[str, str]:
+def _git_environment(repository: Path) -> dict[str, str]:
     return {
-        **os.environ,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
+        **git_environment(repository),
         "GIT_AUTHOR_DATE": "2026-08-09T00:00:00Z",
         "GIT_COMMITTER_DATE": "2026-08-09T00:00:00Z",
     }
@@ -42,21 +41,14 @@ def _git_environment() -> dict[str, str]:
 def _run_git(repository: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-C",
-                str(repository),
-                *arguments,
-            ],
+            git_command(["-C", str(repository), *arguments]),
             check=True,
             capture_output=True,
             text=True,
             timeout=30,
             shell=False,
             stdin=subprocess.DEVNULL,
-            env=_git_environment(),
+            env=_git_environment(repository),
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise BenchmarkSeedError(

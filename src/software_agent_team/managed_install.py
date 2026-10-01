@@ -30,6 +30,7 @@ from software_agent_team.docker_engine import (
     verify_bound_docker_engine,
     verify_docker_engine,
 )
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.paths import user_state_root
 from software_agent_team.releases import (
@@ -2626,11 +2627,24 @@ def _run_command(
     cwd: Path | None,
     environment: Mapping[str, str] | None,
 ) -> None:
+    is_git = arguments[0] == "git"
+    command = (
+        git_command(list(arguments[1:]), allow_https=True)
+        if is_git
+        else list(arguments)
+    )
+    command_environment = (
+        git_environment(cwd or Path.cwd())
+        if is_git
+        else None
+        if environment is None
+        else dict(environment)
+    )
     try:
         subprocess.run(
-            list(arguments),
+            command,
             cwd=cwd,
-            env=None if environment is None else dict(environment),
+            env=command_environment,
             check=True,
             timeout=1_800,
         )
@@ -2639,9 +2653,16 @@ def _run_command(
 
 
 def _capture_command(arguments: Sequence[str]) -> str:
+    is_git = arguments[0] == "git"
+    command = (
+        git_command(list(arguments[1:]), allow_https=True)
+        if is_git
+        else list(arguments)
+    )
     try:
         completed = subprocess.run(
-            list(arguments),
+            command,
+            env=git_environment(Path.cwd()) if is_git else None,
             check=True,
             capture_output=True,
             text=True,

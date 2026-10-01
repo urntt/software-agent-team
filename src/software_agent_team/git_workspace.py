@@ -16,14 +16,15 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.artifacts import WorkResult
+from software_agent_team.git_policy import (
+    UNSAFE_CONFIG_PATTERN,
+    git_command,
+    git_environment,
+)
 
 COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 ATTRIBUTE_FILTER_PATTERN = re.compile(r"(?:^|\s)[-!]?filter(?:=|\s|$)")
-UNSAFE_CONFIG_PATTERN = (
-    r"^(core\.hookspath|core\.fsmonitor|"
-    r"filter\..*\.(clean|smudge|process))$"
-)
 
 
 class GitWorkspaceError(ValueError):
@@ -1015,34 +1016,13 @@ class GitWorkspaceManager:
         return result
 
     def _git_environment(self) -> dict[str, str]:
-        return {
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_TERMINAL_PROMPT": "0",
-            "HOME": str(self.root.resolve(strict=False)),
-            "LANG": "C",
-            "LC_ALL": "C",
-            "PATH": os.environ.get("PATH", ""),
-        }
+        return git_environment(self.root)
 
     def _git_command(
-        self,
-        repository: Path,
-        args: list[str],
-        *,
-        controller_config: bool,
+        self, repository: Path, args: list[str], *, controller_config: bool
     ) -> list[str]:
-        command = [self.git_binary]
-        if controller_config:
-            command.extend(
-                [
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "core.fsmonitor=false",
-                    "-c",
-                    "credential.helper=",
-                ]
-            )
-        command.extend(["-C", str(repository), *args])
-        return command
+        return git_command(
+            ["-C", str(repository), *args],
+            binary=self.git_binary,
+            controller_config=controller_config,
+        )

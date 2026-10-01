@@ -21,6 +21,11 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from software_agent_team.benchmark_seed import prepare_seed_repository
+from software_agent_team.git_policy import (
+    git_command,
+    git_environment,
+    repository_has_callbacks,
+)
 from software_agent_team.process_lifecycle import (
     ProcessLeaseStore,
     ProcessLifecycleError,
@@ -1065,14 +1070,8 @@ def load_project_commands(project: Path) -> ProjectCommands:
 def _git_output(repository: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-C",
-                str(repository),
-                *arguments,
-            ],
+            git_command(["-C", str(repository), *arguments]),
+            env=git_environment(repository),
             check=False,
             capture_output=True,
             text=True,
@@ -1090,17 +1089,17 @@ def _git_output(repository: Path, *arguments: str) -> str:
 def _clone_git_result(source: Path, destination: Path) -> None:
     try:
         result = subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "clone",
-                "--no-local",
-                "--no-checkout",
-                "--",
-                str(source),
-                str(destination),
-            ],
+            git_command(
+                [
+                    "clone",
+                    "--no-local",
+                    "--no-checkout",
+                    "--",
+                    str(source),
+                    str(destination),
+                ]
+            ),
+            env=git_environment(source),
             check=False,
             capture_output=True,
             text=True,
@@ -1182,6 +1181,14 @@ def deliver_product_workspace(
         resolved_source
     ):
         raise ProductFlowError("delivery destination cannot be inside the workspace")
+    try:
+        callbacks = repository_has_callbacks(resolved_source)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ProductFlowError(
+            "could not verify accepted workspace Git policy"
+        ) from error
+    if callbacks:
+        raise ProductFlowError("accepted workspace contains unsafe Git callbacks")
     if (
         _git_output(resolved_source, "rev-parse", f"{expected_commit}^{{commit}}")
         != expected_commit

@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.schema_compatibility import SchemaFamily, SchemaSupport
 from software_agent_team.versioning import (
     InstallationRecord,
@@ -356,7 +357,8 @@ def git_archive_digest(repository: Path, revision: str = "HEAD") -> str:
 
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repository), "archive", "--format=tar", revision],
+            git_command(["-C", str(repository), "archive", "--format=tar", revision]),
+            env=git_environment(repository),
             check=True,
             capture_output=True,
             timeout=30,

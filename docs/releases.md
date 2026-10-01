@@ -135,10 +135,14 @@ git tag -a v0.1.0 -m "release: SAT 0.1.0"
 git push origin v0.1.0
 ```
 
-The pinned GitHub Actions workflow checks out that exact tag, installs the
-locked toolchain, reruns formatting, lint, and all tests, rebuilds the manifest
-and release-bound `bootstrap.sh`, refuses an existing release, and creates the
-GitHub Release with both assets. It never publishes from a dirty checkout or
+The pinned GitHub Actions workflow uses a read-only `gate` job to check out that
+exact tag, install the locked toolchain, rerun formatting, lint, and all tests,
+and build the manifest and release-bound `bootstrap.sh`. Only a dependent
+`publish` job has repository write permission. It downloads the same run's
+commit-named immutable artifact, checks its digests and tag/revision identity,
+refuses an existing release, and creates the GitHub Release with both assets.
+Publication does not check out or execute project/dependency code.
+The workflow never publishes from a dirty checkout or
 moving branch. Main pushes and pull requests run a separate non-publishing
 canonical check workflow; the exact-tag release gate remains independent.
 

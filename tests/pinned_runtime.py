@@ -31,3 +31,12 @@ def pinned_openclaw_node(root: Path) -> Path:
     if not node.is_file():
         pytest.skip(_MISSING_RUNTIME)
     return node
+
+
+def pinned_openclaw_package(root: Path) -> Path:
+    """Locate the frozen package tree, rather than a historical global install."""
+
+    package = root / ".sat/openclaw/runtime/node_modules/openclaw"
+    if not package.is_dir():
+        pytest.skip(_MISSING_RUNTIME)
+    return package

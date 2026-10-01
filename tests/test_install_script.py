@@ -96,6 +96,18 @@ echo 'OpenClaw existing-user-version'
         f"software-agent-team-openclaw-runtime-v1\nroot={openclaw_prefix}\n",
         encoding="utf-8",
     )
+    pins = dict(
+        line.split("=", 1)
+        for line in (checkout / "configs/toolchain.sh").read_text().splitlines()
+        if line.startswith("task_runtime_")
+    )
+    (openclaw_prefix / ".sat-runtime-lock").write_text(
+        "manifest="
+        + pins["task_runtime_manifest_sha256"].strip('"')
+        + " lock="
+        + pins["task_runtime_lock_sha256"].strip('"')
+        + "\n"
+    )
 
     write_executable(
         fake_bin / "id",

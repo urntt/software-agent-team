@@ -41,6 +41,17 @@ establish the current release's provider-backed behavior.
 
 ## Implemented in the checkout
 
+- The `0.6.0` candidate also cleans advisory option whitespace before its shared
+  length bound, reserves the remaining authorization for each paid invocation,
+  waits for temporary reservations and refuses insufficient known request
+  headroom, freezes the npm tree with an empty lifecycle allowlist, and verifies
+  the first uv archive from one shared installer. Host Git consumers share an
+  isolated callback/transport policy; the release gate has read-only permission
+  and passes checked assets to a separate publisher. Focused Planning/budget/
+  runner checks passed 401 tests; lifecycle/permission checks passed 59, and
+  budget/lock/release authority checks passed 57. These suites overlap. Fresh
+  locked-runtime compatibility, the final canonical gate, publication, and the
+  ordinary-user journey remain pending; the published release is still `0.5.5`.
 - The checkout adds `sat uninstall`, persistent shared Planning/execution
   controls with completion and multiline editing, journey-wide visibility,
   read-only elapsed/budget/context/Git telemetry, and bounded visible tool/model
@@ -126,8 +137,10 @@ not freeze its transitive dependency tree, and the first uv installation uses
 a moving installer. Release setup and tests share the publication job's write
 permission. Delivery Git helpers also inherit ambient configuration that the
 workspace helper isolates; a harmless global fsmonitor fixture confirms that
-difference, without demonstrating a sandbox escape. These findings remain
-unfixed; the earlier gate does not cover the new counterexamples.
+difference, without demonstrating a sandbox escape. The `0.6.0` candidate
+addresses these owners, with the focused checks described above. The earlier
+`0.5.5` gate does not cover the new counterexamples; final candidate and
+published validation are still required.
 
 The tagged `v0.5.1` DeepSeek journey demonstrates one Linux managed-install
 and single-route delivery path. The `v0.5.5` canonical gate and pre-tag dev

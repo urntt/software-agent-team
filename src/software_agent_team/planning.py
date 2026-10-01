@@ -2085,15 +2085,20 @@ def _normalize_planning_response_payload(
                 if not isinstance(description, str):
                     continue
                 cleaned = description.strip()
-                if len(cleaned) <= 300:
-                    continue
-                clipped = cleaned[:299].rstrip()
-                if not clipped:
-                    continue
-                option["description"] = clipped + "…"
-                changes.append(
-                    f"shortened question.options[{index}].description to 300 characters"
-                )
+                if cleaned != description:
+                    option["description"] = cleaned
+                    changes.append(
+                        f"trimmed question.options[{index}].description whitespace"
+                    )
+                if len(cleaned) > PLANNING_OPTION_DESCRIPTION_MAX_LENGTH:
+                    clipped = cleaned[
+                        : PLANNING_OPTION_DESCRIPTION_MAX_LENGTH - 1
+                    ].rstrip()
+                    option["description"] = clipped + "…"
+                    changes.append(
+                        f"shortened question.options[{index}].description to "
+                        f"{PLANNING_OPTION_DESCRIPTION_MAX_LENGTH} characters"
+                    )
         try:
             question_category = PlanningDecisionCategory(
                 question.get("decision_category")
@@ -4072,6 +4077,9 @@ class PlanningOptionValue(BaseModel):
         return _clean_text(value, label="Planning option product value")
 
 
+PLANNING_OPTION_DESCRIPTION_MAX_LENGTH = 300
+
+
 class PlanningOption(BaseModel):
     """One suggested answer while preserving a custom-answer path."""
 
@@ -4079,7 +4087,9 @@ class PlanningOption(BaseModel):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=80)
-    description: str = Field(min_length=1, max_length=300)
+    description: str = Field(
+        min_length=1, max_length=PLANNING_OPTION_DESCRIPTION_MAX_LENGTH
+    )
     product_definition_values: tuple[PlanningOptionValue, ...] = ()
 
     @field_validator("label", "description")

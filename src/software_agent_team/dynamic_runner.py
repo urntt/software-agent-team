@@ -992,6 +992,25 @@ class DynamicAgentRunner:
             else:
                 request = base_request
             pricing = self.pricing_by_model[cast(str, request.model)]
+
+            def check_budget_wait() -> None:
+                if self.invocation_stop_provider is not None:
+                    stop = self.invocation_stop_provider(agent.id)
+                    if stop is not None:
+                        if stop not in {
+                            TerminationReason.USER_INTERRUPTED,
+                            TerminationReason.USER_CANCELLED,
+                        }:
+                            raise DynamicAgentRunnerError(
+                                "invocation stop provider returned an invalid reason",
+                                TerminationReason.CONTROLLER_ERROR,
+                            )
+                        raise DynamicAgentRunnerError(
+                            "Agent invocation was stopped while waiting for "
+                            "budget admission.",
+                            stop,
+                        )
+
             reservation = self.budget_ledger.reserve_call(
                 agent.id,
                 run_id=self.task_brief.run_id,
@@ -999,6 +1018,8 @@ class DynamicAgentRunner:
                 attempt=attempt,
                 route_id=route_id,
                 pricing=pricing,
+                wait_for_active=True,
+                wait_check=check_budget_wait,
             )
             if current_continuation is not None:
                 self._emit_activity(

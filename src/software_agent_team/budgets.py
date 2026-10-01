@@ -6,11 +6,12 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from threading import Lock
+from threading import Condition, Lock
 from typing import Literal, Self
 from uuid import uuid4
 
@@ -77,6 +78,10 @@ class AgentBudgetExceeded(RuntimeError):
     def __init__(self, detail: str, usage: AgentBudgetUsage) -> None:
         super().__init__(detail)
         self.usage = usage
+
+
+class AgentBudgetBusy(AgentBudgetExceeded):
+    """Authorization is temporarily occupied by an active paid invocation."""
 
 
 class AgentCallReservation(CachePriceSupport):
@@ -399,8 +404,9 @@ class AgentBudgetLedger:
 
     Controlled-evaluation call count is enforced before launch. For ordinary
     tasks, every call must have frozen pricing. Paid calls atomically occupy
-    available authorization while active, using a route-bound estimate when
-    possible and the whole remaining authorization otherwise.
+    the whole remaining authorization while active. A request token limit does
+    not bound the total requests in a tool-loop invocation. Paid invocations
+    wait for settlement; confirmed-zero routes can still run concurrently.
     Provider token usage arrives only after a call, so an absolute billing cap
     still requires a provider-side spending/quota limit. Unknown cost stops an
     ordinary task. Missing token telemetry remains explicit, but a route whose
@@ -411,6 +417,7 @@ class AgentBudgetLedger:
     def __init__(self, budget: AgentBudget) -> None:
         self.budget = budget
         self._lock = Lock()
+        self._condition = Condition(self._lock)
         self._calls_started = 0
         self._calls_completed = 0
         self._active: dict[int, AgentCallReservation] = {}
@@ -431,90 +438,133 @@ class AgentBudgetLedger:
         attempt: int = 1,
         route_id: str | None = None,
         pricing: ModelPricing | None = None,
+        wait_for_active: bool = False,
+        wait_check: Callable[[], None] | None = None,
     ) -> AgentCallReservation:
-        """Reserve one call before launch without a parallel oversubscription race."""
+        """Reserve an invocation; optionally wait for temporarily occupied funds.
 
+        Waiting is outside invocation execution time, performs no provider call,
+        and rechecks cancellation before admission. Terminal budget failures
+        never wait. Settled usage and free routes keep their existing semantics.
+        """
+
+        while True:
+            if wait_check is not None:
+                wait_check()
+            with self._condition:
+                try:
+                    return self._reserve_call_locked(
+                        agent_id,
+                        run_id=run_id,
+                        stage=stage,
+                        attempt=attempt,
+                        route_id=route_id,
+                        pricing=pricing,
+                    )
+                except AgentBudgetBusy:
+                    if not wait_for_active:
+                        raise
+                    self._condition.wait(timeout=0.1)
+
+    def _reserve_call_locked(
+        self,
+        agent_id: str,
+        *,
+        run_id: str | None = None,
+        stage: str | None = None,
+        attempt: int = 1,
+        route_id: str | None = None,
+        pricing: ModelPricing | None = None,
+    ) -> AgentCallReservation:
         if re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None:
             raise ValueError("budget reservations require a valid Agent ID")
-        with self._lock:
-            usage = self._snapshot_locked()
+        usage = self._snapshot_locked()
+        if (
+            self.budget.max_calls is not None
+            and self._calls_started >= self.budget.max_calls
+        ):
+            raise AgentBudgetExceeded(
+                "Agent call budget is exhausted",
+                usage,
+            )
+        reserved_cost = Decimal(0)
+        if self.budget.authority is BudgetAuthority.USER_TASK:
+            if run_id is None or stage is None or route_id is None:
+                raise ValueError(
+                    "Task model-call attribution is incomplete before launch"
+                )
             if (
-                self.budget.max_calls is not None
-                and self._calls_started >= self.budget.max_calls
+                pricing is None
+                or pricing.pricing_source is None
+                or pricing.cache_pricing is None
             ):
                 raise AgentBudgetExceeded(
-                    "Agent call budget is exhausted",
+                    "Task model pricing is unknown before launch",
                     usage,
                 )
-            reserved_cost = Decimal(0)
-            if self.budget.authority is BudgetAuthority.USER_TASK:
-                if run_id is None or stage is None or route_id is None:
-                    raise ValueError(
-                        "Task model-call attribution is incomplete before launch"
-                    )
-                if (
-                    pricing is None
-                    or pricing.pricing_source is None
-                    or pricing.cache_pricing is None
-                ):
-                    raise AgentBudgetExceeded(
-                        "Task model pricing is unknown before launch",
-                        usage,
-                    )
-                if self._unpriced_calls:
-                    raise AgentBudgetExceeded(
-                        "Task model spend cannot be accounted before another call",
-                        usage,
-                    )
-                confirmed_zero = _has_confirmed_zero_pricing(
-                    input_price=pricing.input_cost_per_million_usd,
-                    output_price=pricing.output_cost_per_million_usd,
-                    pricing_source=pricing.pricing_source,
-                    cache_pricing=pricing.cache_pricing,
+            if self._unpriced_calls:
+                raise AgentBudgetExceeded(
+                    "Task model spend cannot be accounted before another call",
+                    usage,
                 )
-                if not confirmed_zero:
-                    available = (
-                        self.budget.max_estimated_cost_usd
-                        - self._known_estimated_cost_usd
-                        - usage.active_reserved_cost_usd
-                    )
-                    if available <= 0:
-                        raise AgentBudgetExceeded(
-                            "Task model-spend authorization is exhausted before "
-                            "launch or reserved by active calls",
-                            usage,
-                        )
-                    upper_bound = pricing.max_call_estimated_cost_usd()
-                    reserved_cost = (
-                        available
-                        if upper_bound is None or upper_bound == 0
-                        else min(available, upper_bound)
-                    )
-            self._calls_started += 1
-            sequence = self._calls_started
-            reservation = AgentCallReservation(
-                sequence=sequence,
-                agent_id=agent_id,
-                run_id=run_id,
-                stage=stage,
-                attempt=attempt,
-                route_id=route_id,
-                model=None if pricing is None else pricing.model,
-                input_cost_per_million_usd=(
-                    None if pricing is None else pricing.input_cost_per_million_usd
-                ),
-                output_cost_per_million_usd=(
-                    None if pricing is None else pricing.output_cost_per_million_usd
-                ),
-                pricing_source=None if pricing is None else pricing.pricing_source,
-                pricing_observed_at=(
-                    None if pricing is None else pricing.pricing_observed_at
-                ),
-                cache_pricing=None if pricing is None else pricing.cache_pricing,
-                reserved_estimated_cost_usd=reserved_cost,
+            confirmed_zero = _has_confirmed_zero_pricing(
+                input_price=pricing.input_cost_per_million_usd,
+                output_price=pricing.output_cost_per_million_usd,
+                pricing_source=pricing.pricing_source,
+                cache_pricing=pricing.cache_pricing,
             )
-            self._active[sequence] = reservation
-            return reservation
+            if not confirmed_zero:
+                available = (
+                    self.budget.max_estimated_cost_usd
+                    - self._known_estimated_cost_usd
+                    - usage.active_reserved_cost_usd
+                )
+                if available <= 0:
+                    rejection = (
+                        AgentBudgetBusy
+                        if usage.active_reserved_cost_usd > 0
+                        and self._known_estimated_cost_usd
+                        < self.budget.max_estimated_cost_usd
+                        else AgentBudgetExceeded
+                    )
+                    raise rejection(
+                        "Task model-spend authorization is exhausted before "
+                        "launch or reserved by active calls",
+                        usage,
+                    )
+                request_bound = pricing.max_call_estimated_cost_usd()
+                if request_bound is not None and request_bound > available:
+                    raise AgentBudgetExceeded(
+                        "Remaining task authorization cannot cover one provider "
+                        "request at the frozen token bounds",
+                        usage,
+                    )
+                reserved_cost = available
+        self._calls_started += 1
+        sequence = self._calls_started
+        reservation = AgentCallReservation(
+            sequence=sequence,
+            agent_id=agent_id,
+            run_id=run_id,
+            stage=stage,
+            attempt=attempt,
+            route_id=route_id,
+            model=None if pricing is None else pricing.model,
+            input_cost_per_million_usd=(
+                None if pricing is None else pricing.input_cost_per_million_usd
+            ),
+            output_cost_per_million_usd=(
+                None if pricing is None else pricing.output_cost_per_million_usd
+            ),
+            pricing_source=None if pricing is None else pricing.pricing_source,
+            pricing_observed_at=(
+                None if pricing is None else pricing.pricing_observed_at
+            ),
+            cache_pricing=None if pricing is None else pricing.cache_pricing,
+            reserved_estimated_cost_usd=reserved_cost,
+        )
+        self._active[sequence] = reservation
+        return reservation
 
     def complete_call(
         self,
@@ -577,6 +627,7 @@ class AgentBudgetLedger:
 
             # Validate first: malformed evidence must not partially settle a call.
             del self._active[reservation.sequence]
+            self._condition.notify_all()
             self._calls_completed += 1
             if input_tokens is None or output_tokens is None:
                 self._unreported_token_calls += 1
@@ -743,7 +794,7 @@ class ModelPricing(CachePriceSupport):
         return value.astimezone(UTC)
 
     def max_call_estimated_cost_usd(self) -> Decimal | None:
-        """Bound one call from normalized token buckets and frozen route limits."""
+        """Estimate one provider request, never an entire tool-loop invocation."""
 
         if (
             self.max_input_tokens is None

@@ -8,7 +8,11 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from pinned_runtime import pinned_openclaw_binary, pinned_openclaw_node
+from pinned_runtime import (
+    pinned_openclaw_binary,
+    pinned_openclaw_node,
+    pinned_openclaw_package,
+)
 from pydantic import ValidationError
 
 import software_agent_team.runtime_configuration as runtime_configuration
@@ -445,8 +449,7 @@ def test_materialized_plugins_disable_pinned_runtime_memory_slot(
         team_plan=None if bootstrap else adaptive_team_plan(),
     )
     node = pinned_openclaw_node(REPOSITORY_ROOT)
-    runtime = node.parent.parent
-    dist = runtime / "lib/node_modules/openclaw/dist"
+    dist = pinned_openclaw_package(REPOSITORY_ROOT) / "dist"
     modules = [
         path
         for path in dist.glob("config-state-*.mjs")
@@ -513,10 +516,9 @@ def test_materialized_config_enables_pinned_no_progress_loop_breaker(
         team_plan=adaptive_team_plan(),
     )
     node = pinned_openclaw_node(REPOSITORY_ROOT)
-    runtime = node.parent.parent
     modules = [
         path
-        for path in (runtime / "lib/node_modules/openclaw/dist").glob(
+        for path in (pinned_openclaw_package(REPOSITORY_ROOT) / "dist").glob(
             "tool-loop-detection-*.mjs"
         )
         if "function detectToolCallLoop(" in path.read_text()

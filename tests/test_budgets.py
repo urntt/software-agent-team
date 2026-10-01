@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Event
 
 import pytest
 from pydantic import ValidationError
@@ -22,6 +23,7 @@ from software_agent_team.budgets import (
 )
 from software_agent_team.model_costs import CachePricing, CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
+from software_agent_team.openclaw_session_evidence import _invocation_usage
 
 
 def budget(**updates: object) -> AgentBudget:
@@ -353,11 +355,11 @@ def test_user_task_atomically_reserves_paid_calls_near_ceiling() -> None:
     ledger.complete_call(
         settled,
         input_tokens=220_000,
-        output_tokens=40_000,
+        output_tokens=0,
         duration_ms=125,
         cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
     )
-    assert ledger.snapshot().known_estimated_cost_usd == Decimal("0.95")
+    assert ledger.snapshot().known_estimated_cost_usd == Decimal("0.55")
 
     def reserve(index: int) -> AgentCallReservation | None:
         try:
@@ -369,9 +371,9 @@ def test_user_task_atomically_reserves_paid_calls_near_ceiling() -> None:
         accepted = tuple(executor.map(reserve, range(2)))
 
     assert sum(item is not None for item in accepted) == 1
-    assert ledger.snapshot().active_reserved_cost_usd == Decimal("0.05")
+    assert ledger.snapshot().active_reserved_cost_usd == Decimal("0.45")
     assert (
-        ledger.snapshot().model_dump(mode="json")["active_reserved_cost_usd"] == "0.05"
+        ledger.snapshot().model_dump(mode="json")["active_reserved_cost_usd"] == "0.45"
     )
     assert ledger.snapshot().remaining_estimated_cost_usd(ledger.budget) == 0
     active = next(item for item in accepted if item is not None)
@@ -387,11 +389,16 @@ def test_user_task_atomically_reserves_paid_calls_near_ceiling() -> None:
     assert ledger.snapshot().remaining_estimated_cost_usd(ledger.budget) > 0
 
 
-def test_paid_call_without_token_limits_occupies_all_remaining_authorization() -> None:
+@pytest.mark.parametrize("token_limits", [True, False])
+def test_paid_invocation_occupies_all_remaining_authorization(
+    token_limits: bool,
+) -> None:
     ledger = AgentBudgetLedger(user_task_budget())
-    unbounded = priced_model().model_copy(
-        update={"max_input_tokens": None, "max_output_tokens": None}
-    )
+    unbounded = priced_model()
+    if not token_limits:
+        unbounded = unbounded.model_copy(
+            update={"max_input_tokens": None, "max_output_tokens": None}
+        )
     first = reserve_user_call(ledger, pricing=unbounded)
     assert first.reserved_estimated_cost_usd == Decimal("1.00")
     with pytest.raises(AgentBudgetExceeded, match="reserved by active calls"):
@@ -503,7 +510,10 @@ def test_user_task_stops_when_provider_usage_cannot_account_cost() -> None:
 def test_parallel_unknown_usage_does_not_taint_an_already_reserved_known_call() -> None:
     ledger = AgentBudgetLedger(user_task_budget())
     unknown = reserve_user_call(ledger)
-    known = reserve_user_call(ledger, attempt=2)
+    free = priced_model(input_price="0", output_price="0").model_copy(
+        update={"pricing_source": ModelMetadataSource.CONFIRMED_ZERO}
+    )
+    known = reserve_user_call(ledger, attempt=2, pricing=free)
 
     with pytest.raises(AgentBudgetExceeded, match="could not be accounted"):
         ledger.complete_call(
@@ -526,7 +536,7 @@ def test_parallel_unknown_usage_does_not_taint_an_already_reserved_known_call() 
     assert usage.active_calls == 0
     assert usage.unreported_token_calls == 1
     assert usage.unpriced_calls == 1
-    assert ledger.call_records()[1].cost_usd == Decimal("0.00045")
+    assert ledger.call_records()[1].cost_usd == Decimal(0)
     with pytest.raises(AgentBudgetExceeded, match="cannot be accounted"):
         reserve_user_call(ledger, attempt=3)
 
@@ -651,3 +661,101 @@ def test_partial_usage_settles_once_preserving_known_buckets(
         ledger.complete_call(
             reservation, input_tokens=7, output_tokens=9, duration_ms=1
         )
+
+
+def test_paid_invocation_waits_for_multi_request_settlement() -> None:
+    ledger = AgentBudgetLedger(user_task_budget("0.25"))
+    pricing = priced_model(input_price="1", output_price="0").model_copy(
+        update={"max_input_tokens": 100_000, "max_output_tokens": 1}
+    )
+    assert pricing.max_call_estimated_cost_usd() == Decimal("0.10")
+    first = reserve_user_call(ledger, pricing=pricing)
+    assert first.reserved_estimated_cost_usd == Decimal("0.25")
+    checked = Event()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiting = pool.submit(
+            ledger.reserve_call,
+            "reviewer",
+            run_id="task-1",
+            stage="review",
+            route_id="default",
+            pricing=pricing,
+            wait_for_active=True,
+            wait_check=checked.set,
+        )
+        assert checked.wait(1)
+        assert not waiting.done()
+        assert ledger.snapshot().calls_started == 1
+        # Cross the production aggregation of two attributable assistant requests.
+        usage = _invocation_usage(
+            tuple(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "provider": "provider",
+                        "model": "model",
+                        "usage": {
+                            "input": 100_000,
+                            "output": 0,
+                            "cacheRead": 0,
+                            "cacheWrite": 0,
+                        },
+                    },
+                }
+                for _ in range(2)
+            ),
+            provider="provider",
+            model="provider/model",
+            runtime_rejections=(),
+        )
+        assert usage["input"] == 200_000
+        ledger.complete_call(
+            first,
+            input_tokens=usage["input"],
+            output_tokens=usage["output"],
+            duration_ms=1,
+            cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
+        )
+        with pytest.raises(AgentBudgetExceeded, match="cannot cover one provider"):
+            waiting.result(timeout=2)
+    assert ledger.snapshot().known_estimated_cost_usd == Decimal("0.20")
+    assert ledger.snapshot().calls_started == 1
+    assert ledger.snapshot().active_reserved_cost_usd == 0
+
+
+def test_paid_admission_wait_is_cancellable_without_starting_a_call() -> None:
+    ledger = AgentBudgetLedger(user_task_budget())
+    active = reserve_user_call(ledger)
+    checked = Event()
+    cancelled = Event()
+
+    def check() -> None:
+        checked.set()
+        if cancelled.is_set():
+            raise InterruptedError("cancelled before launch")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiting = pool.submit(
+            ledger.reserve_call,
+            "reviewer",
+            run_id="task-1",
+            stage="review",
+            route_id="default",
+            pricing=priced_model(),
+            wait_for_active=True,
+            wait_check=check,
+        )
+        assert checked.wait(1)
+        cancelled.set()
+        with pytest.raises(InterruptedError, match="cancelled before launch"):
+            waiting.result(timeout=2)
+    assert ledger.snapshot().calls_started == 1
+    ledger.complete_call(
+        active,
+        input_tokens=100,
+        output_tokens=20,
+        duration_ms=1,
+        cache_usage=CacheTokenUsage(read_tokens=0, write_tokens=0),
+    )
+    assert ledger.snapshot().active_calls == 0

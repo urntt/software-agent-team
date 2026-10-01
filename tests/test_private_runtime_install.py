@@ -51,7 +51,10 @@ def fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     for name in (
         "scripts/install-openclaw.sh",
         "scripts/openclaw-environment.sh",
+        "scripts/check-runtime-lock.mjs",
         "configs/toolchain.sh",
+        "configs/openclaw-runtime/package.json",
+        "configs/openclaw-runtime/package-lock.json",
     ):
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -77,9 +80,11 @@ printf '%s\\n' "$*" >> "$CALL_LOG"
 case "$1" in
   --version) echo v24.19.0 ;;
   -e) exit "${SQLITE_EXIT:-0}" ;;
+  */check-runtime-lock.mjs) exit "${LOCK_EXIT:-0}" ;;
   */npm-cli.js)
     [[ -z "${NPM_CONFIG_PREFIX:-}" ]] || exit 8
     [[ "$NPM_CONFIG_USERCONFIG" == "$HOME/.npmrc" ]] || exit 9
+    [[ "$*" == *"ci --prefix"* && "$*" == *"--ignore-scripts"* ]] || exit 16
     exit "${NPM_EXIT:-0}" ;;
   */entry.js)
     [[ "$2" == --version ]] || exit 10

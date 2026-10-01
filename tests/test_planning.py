@@ -2039,6 +2039,43 @@ def test_overlong_question_option_advisory_is_bounded_before_validation(
     assert len(executor.requests) == 1
 
 
+@pytest.mark.parametrize("body_length", [299, 300, 333])
+def test_question_option_whitespace_is_normalized_before_length_validation(
+    tmp_path: Path, body_length: int
+) -> None:
+    initial = product_intent_question_response().model_dump(mode="json")
+    original = "\n " + "x" * body_length + "\n"
+    initial["question"]["options"][0]["description"] = original
+    executor = ScriptedAgentExecutor(
+        [ScriptedAgentResponse(text="ignored", submission_payload=initial)]
+    )
+    store = PlanningStore(tmp_path / "planning")
+    coordinator = AdaptivePlanningCoordinator(
+        executor=executor, store=store, policy=policy(), clock=AdvancingClock()
+    )
+    shown: list[PresentedPlanningQuestion] = []
+    assert (
+        coordinator.start(
+            request(), answer_question=lambda question: shown.append(question) or None
+        )
+        is None
+    )
+    turn = store.load_turn(request().run_id, 1)
+    assert turn.response_validation is None
+    assert turn.submission_payload["question"]["options"][0]["description"] == original
+    assert (
+        "trimmed question.options[0].description whitespace"
+        in turn.response_normalizations
+    )
+    assert shown[0].options[0].description == (
+        "x" * body_length if body_length <= 300 else "x" * 299 + "…"
+    )
+    assert shown[0].options[0].product_definition_values == (
+        product_intent_question_response().question.options[0].product_definition_values
+    )
+    assert len(executor.requests) == 1
+
+
 def test_question_authority_field_typo_requires_whole_question_replacement(
     tmp_path: Path,
 ) -> None:

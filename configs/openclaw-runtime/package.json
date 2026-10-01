@@ -1,0 +1,11 @@
+{
+  "name": "sat-private-openclaw-runtime",
+  "version": "2026.9.6",
+  "private": true,
+  "dependencies": {
+    "openclaw": "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.6.tgz"
+  },
+  "satLifecyclePolicy": {
+    "allowlist": []
+  }
+}

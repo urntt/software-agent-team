@@ -46,12 +46,29 @@ Private runtime setup uses SAT's own dependency-only installer, not a moving
 upstream installation script. `configs/toolchain.sh` binds both runtime versions
 and the platform-specific Node and OpenClaw package checksums. Downloads must
 match before extraction or installation; Node's linked SQLite is also checked.
-OpenClaw's transitive npm dependencies are resolved by its package metadata;
-this is not a claim of a fully locked transitive npm dependency tree.
+`configs/openclaw-runtime/package-lock.json` freezes the complete npm tree,
+including platform-specific optional packages, with registry archive integrity.
+Its checksum and the root manifest checksum are bound by `toolchain.sh`; setup
+checks them before `npm ci --ignore-scripts`. Bundled files inherit the containing
+OpenClaw archive's integrity. The versioned lifecycle allowlist is empty: no
+dependency install/prepare/postinstall script is authorized. The supported SAT
+text-model and sandbox-helper paths are verified with the real pinned runtime;
+unrelated native integrations are outside that compatibility claim. Installed
+package versions are checked before the private launcher is published. A changed
+lock requires a fresh application-version runtime, preserving the previous tree
+on failure. Existing matching dependencies are reused only with their frozen
+manifest/lock identity.
+
+When uv is absent, bootstrap and checkout setup use the same helper to download
+uv `0.12.0` from a versioned GitHub release and verify the architecture-specific
+SHA-256 before executing its binary. They never execute a downloaded installer
+script. Existing shared uv executables, including an explicit `UV_BIN`, are
+retained; the helper publishes only an absent target and does not modify shell
+profiles or replace shared tools.
 No Gateway discovery, refresh, restart, or onboarding runs during setup. The
 private launcher is published only after dependency version checks succeed.
 The installer also removes inherited system-service state roots and Node preload
-settings before dependency probes and package lifecycle execution. Node's
+settings before dependency probes and package installation. Node's
 compile cache lives at `.sat/openclaw/compile-cache/`, owned by the installing
 user with mode `0700`. Setup refreshes an existing private launcher without
 reinstalling matching dependencies. Each launch validates this cache before
@@ -411,12 +428,15 @@ separate ordinary-product limits.
 
 Before each paid call, the task ledger atomically reserves estimated spend
 against that USD authorization, including reservations held by other active
-calls. It uses frozen route rates and input/output token limits when available.
-Without a usable limit, one paid call occupies all remaining authorization
-until it settles; a confirmed-free route occupies none. A call whose estimated
-upper bound exceeds the remainder may still start alone, so this local
-concurrency protection is not a provider billing cap. Configure a provider-side
+calls. One provider request's token limits do not bound a tool-loop invocation,
+so every paid invocation conservatively occupies all remaining authorization
+until it settles. Other paid Agents wait and recheck cancellation; a confirmed-free
+route occupies none. An invocation can exceed its local authorization before
+usage returns, so this policy is not a provider billing cap. Configure a provider-side
 spending or quota limit if a hard billing boundary is required.
+When a frozen single-request token bound is available, a remaining authorization
+below that estimate refuses another paid launch instead of starting with a smaller
+reservation. The bound is conservative, rather than a prediction of the next prompt.
 
 The normal first-run wizard stores only one strict default model profile in SAT
 configuration and uses checked-in runtime defaults. Credential entry and

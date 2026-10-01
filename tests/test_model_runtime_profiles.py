@@ -6,7 +6,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from pinned_runtime import pinned_openclaw_binary, pinned_openclaw_node
+from pinned_runtime import (
+    pinned_openclaw_binary,
+    pinned_openclaw_node,
+    pinned_openclaw_package,
+)
 from pydantic import ValidationError
 
 from software_agent_team.model_routing import (
@@ -304,7 +308,7 @@ def test_pinned_google_adapter_never_maps_gemini_38_to_minimal(
         "medium"
     )
     node = pinned_openclaw_node(REPOSITORY_ROOT)
-    dist = node.parent.parent / "lib/node_modules/openclaw/dist"
+    dist = pinned_openclaw_package(REPOSITORY_ROOT) / "dist"
     modules = [
         path
         for path in dist.glob("provider-stream-shared-*.mjs")

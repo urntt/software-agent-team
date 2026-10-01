@@ -388,8 +388,9 @@ may perform only these bounded, semantics-preserving normalizations:
   response kind; partial, mixed, and ambiguous objects remain invalid;
 - Infer `kind` when an existing envelope has exactly one non-null `question` or
   `proposal` body and therefore makes the discriminator unambiguous;
-- Bound only a suggested question option's advisory `description` to 300
-  characters, marking omitted prose with an ellipsis. The raw typed response
+- Trim surrounding whitespace in a suggested question option's advisory
+  `description` before enforcing its shared 300-character bound, marking
+  omitted prose with an ellipsis. The raw typed response
   and the normalization are retained; option IDs, labels, and exact
   `product_definition_values` are unchanged;
 - Remove a criterion definition whose exact ID belongs to the active
@@ -1427,9 +1428,14 @@ confirmed as zero. Every invocation records the canonical provider/model,
 route reference, resolution source and reason, frozen price source and
 observation time, telemetry, estimated cost, and remaining task authorization.
 The controller includes active paid-call reservations in that remaining amount.
-Unknown per-call token bounds serialize paid admission by occupying the whole
-available authorization until settlement; confirmed-zero routes occupy none.
-One provider call may still exceed the locally estimated amount, so a hard
+Each paid invocation occupies the whole available authorization until settlement:
+one request's token bounds do not bound an entire tool loop. Other paid Agents
+wait, with cancellation rechecked, rather than failing because funds are temporarily
+reserved. Confirmed-zero routes occupy none and can still run concurrently.
+If the frozen bound for one request no longer fits, a subsequent paid invocation
+is refused rather than given a smaller reservation.
+This conservative policy does not add a turn cap. One invocation may still
+exceed the locally authorized amount before usage is returned, so a hard
 billing ceiling requires provider-side enforcement.
 The standard progress view shows the updated amount after every invocation;
 the terminal ledger and report preserve the complete Planning-to-delivery

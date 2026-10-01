@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.managed_install import (
     LATEST_RELEASE_API_ENVIRONMENT_VARIABLE,
     MANAGED_ROOT_MARKER_NAME,
@@ -381,7 +382,8 @@ def _git_output(repository: Path, *arguments: str) -> str:
 
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repository), *arguments],
+            git_command(["-C", str(repository), *arguments]),
+            env=git_environment(repository),
             check=True,
             capture_output=True,
             text=True,

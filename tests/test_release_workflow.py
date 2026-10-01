@@ -99,4 +99,18 @@ def test_release_workflow_keeps_minimal_repository_permissions() -> None:
         "concurrency:", maxsplit=1
     )[0]
 
-    assert permissions.strip() == "contents: write"
+    assert permissions.strip() == "contents: read"
+    gate = workflow.split("  gate:", maxsplit=1)[1].split("  publish:", maxsplit=1)[0]
+    publish = workflow.split("  publish:", maxsplit=1)[1]
+    assert "contents: write" not in gate
+    assert "needs: gate" in publish
+    assert "contents: write" in publish
+    assert "GH_REPO: ${{ github.repository }}" in publish
+    assert "make setup" not in publish
+    assert "make check" not in publish
+    assert "actions/checkout" not in publish
+    assert "setup-uv" not in publish
+    assert "release-assets-${{ github.sha }}" in gate
+    assert "release-assets-${{ github.sha }}" in publish
+    assert "sha256sum --check SHA256SUMS" in publish
+    assert 'manifest["source_revision"]' in publish

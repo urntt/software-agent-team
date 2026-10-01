@@ -59,23 +59,30 @@ fi
 task_installer_home="$(mktemp -d "$task_runtime_root/.install-home.XXXXXX")"
 
 if [[ ! -x "$task_uv_bin" ]]; then
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh
+  bash "$task_root/scripts/install-uv.sh" "$task_uv_bin"
 fi
 
-task_installed_openclaw_version="$(
-  sat_run_openclaw_isolated \
-    "$task_installer_home" \
-    "$task_installer_home/state" \
-    "$task_installer_home/state/openclaw.json" \
-    "$task_openclaw_bin" --version 2>/dev/null || true
-)"
-task_installed_node_version="$(
-  sat_run_openclaw_isolated \
-    "$task_installer_home" \
-    "$task_installer_home/state" \
-    "$task_installer_home/state/openclaw.json" \
-    "$task_node_bin" --version 2>/dev/null || true
-)"
+task_dependency_marker="$task_openclaw_prefix/.sat-runtime-lock"
+task_expected_dependency_identity="manifest=$task_runtime_manifest_sha256 lock=$task_runtime_lock_sha256"
+task_installed_openclaw_version=""
+task_installed_node_version=""
+if [[ -f "$task_dependency_marker" && ! -L "$task_dependency_marker" && \
+   "$(cat "$task_dependency_marker")" == "$task_expected_dependency_identity" ]]; then
+  task_installed_openclaw_version="$(
+    sat_run_openclaw_isolated \
+      "$task_installer_home" \
+      "$task_installer_home/state" \
+      "$task_installer_home/state/openclaw.json" \
+      "$task_openclaw_bin" --version 2>/dev/null || true
+  )"
+  task_installed_node_version="$(
+    sat_run_openclaw_isolated \
+      "$task_installer_home" \
+      "$task_installer_home/state" \
+      "$task_installer_home/state/openclaw.json" \
+      "$task_node_bin" --version 2>/dev/null || true
+  )"
+fi
 if [[ ! -x "$task_openclaw_bin" ]] || \
   [[ "$task_installed_openclaw_version" != *"$task_openclaw_version"* ]] || \
   [[ "$task_installed_node_version" != "v$task_node_version" ]]; then
@@ -87,7 +94,7 @@ if [[ ! -x "$task_openclaw_bin" ]] || \
 fi
 
 sat_publish_openclaw_launcher "$task_openclaw_prefix" "$task_node_bin" \
-  "$task_openclaw_prefix/tools/node-v$task_node_version/lib/node_modules/openclaw/dist/entry.js" \
+  "$task_openclaw_prefix/runtime/node_modules/openclaw/dist/entry.js" \
   "$task_openclaw_environment" || fail "private launcher/cache refresh failed"
 
 [[ -x "$task_openclaw_bin" ]] || fail "SAT OpenClaw binary is missing after setup"

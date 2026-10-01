@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.releases import (
     DEFAULT_REPOSITORY_URL,
     ReleaseManifest,
@@ -230,7 +231,8 @@ def _prior_release_version(
 def _git(repository: Path, *arguments: str) -> str:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repository), *arguments],
+            git_command(["-C", str(repository), *arguments]),
+            env=git_environment(repository),
             check=True,
             capture_output=True,
             text=True,

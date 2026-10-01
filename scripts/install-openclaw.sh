@@ -49,6 +49,23 @@ if [[ ! -x "$task_node_root/bin/node" ]]; then
 fi
 task_node="$task_node_root/bin/node"
 [[ "$("$task_node" --version)" == "v$task_node_version" ]] || fail "Node version mismatch"
+task_runtime="$task_prefix/runtime"
+if [[ -e "$task_runtime" || -L "$task_runtime" ]]; then
+  [[ -d "$task_runtime" && ! -L "$task_runtime" && \
+     -f "$task_prefix/.sat-runtime-lock" && ! -L "$task_prefix/.sat-runtime-lock" && \
+     "$(cat "$task_prefix/.sat-runtime-lock")" == \
+     "manifest=$task_runtime_manifest_sha256 lock=$task_runtime_lock_sha256" ]] || \
+    fail "runtime packages already exist; preserve them and reinstall this application version"
+  "$task_node" "$task_root/scripts/check-runtime-lock.mjs" "$task_runtime" \
+    "$task_openclaw_version" "$task_runtime_manifest_sha256" "$task_runtime_lock_sha256" installed || \
+    fail "existing runtime dependency identity is invalid"
+  task_entry="$task_runtime/node_modules/openclaw/dist/entry.js"
+  [[ "$("$task_node" "$task_entry" --version)" == *"$task_openclaw_version"* ]] || \
+    fail "existing OpenClaw version mismatch"
+  sat_publish_openclaw_launcher "$task_prefix" "$task_node" "$task_entry" \
+    "$task_root/scripts/openclaw-environment.sh" || fail "private launcher publication failed"
+  exit 0
+fi
 # Check linked SQLite instead of bypassing the upstream WAL-reset safety guard.
 "$task_node" -e 'const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync(":memory:"); try { const [a,b,c]=db.prepare("select sqlite_version() as v").get().v.split(".").map(Number); if (!(a>3 || (a===3 && (b>51 || (b===51 && c>=3) || (b===50 && c>=7) || (b===44 && c>=6))))) process.exit(1); } finally {db.close();}' || \
   fail "Node SQLite does not meet the WAL-reset safety boundary"
@@ -59,6 +76,12 @@ curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 30 \
   -o "$task_stage/openclaw.tgz" || fail "OpenClaw package download failed"
 [[ "$(sha256sum "$task_stage/openclaw.tgz" | cut -d ' ' -f 1)" == "$task_openclaw_sha256" ]] || \
   fail "OpenClaw package checksum mismatch; package was not installed"
+mkdir -p "$task_stage/runtime" "$task_stage/tmp"
+cp "$task_root/configs/openclaw-runtime/package.json" \
+   "$task_root/configs/openclaw-runtime/package-lock.json" "$task_stage/runtime/"
+"$task_node" "$task_root/scripts/check-runtime-lock.mjs" "$task_stage/runtime" \
+  "$task_openclaw_version" "$task_runtime_manifest_sha256" "$task_runtime_lock_sha256" || \
+  fail "runtime dependency authority is invalid; no dependency code was executed"
 task_npm_environment=(env -u NODE_OPTIONS -u NODE_PATH)
 for task_name in "${!NPM_CONFIG_@}" "${!npm_config_@}"; do
   task_npm_environment+=(-u "$task_name")
@@ -66,12 +89,27 @@ done
 "${task_npm_environment[@]}" PATH="$task_node_root/bin:$PATH" \
   NPM_CONFIG_USERCONFIG="$HOME/.npmrc" NPM_CONFIG_GLOBALCONFIG="$HOME/global-npmrc" \
   NPM_CONFIG_CACHE="$HOME/npm-cache" NPM_CONFIG_UPDATE_NOTIFIER=false \
+  NPM_CONFIG_IGNORE_SCRIPTS=true TMPDIR="$task_stage/tmp" \
   "$task_node" "$task_node_root/lib/node_modules/npm/bin/npm-cli.js" \
-  install --global --prefix "$task_node_root" --no-audit --no-fund \
-  "$task_stage/openclaw.tgz" || fail "pinned OpenClaw package installation failed"
-task_entry="$task_node_root/lib/node_modules/openclaw/dist/entry.js"
+  ci --prefix "$task_stage/runtime" --ignore-scripts --no-audit --no-fund || \
+  fail "locked OpenClaw package installation failed"
+"$task_node" "$task_root/scripts/check-runtime-lock.mjs" "$task_stage/runtime" \
+  "$task_openclaw_version" "$task_runtime_manifest_sha256" "$task_runtime_lock_sha256" installed || \
+  fail "installed runtime packages do not match the dependency authority"
+task_entry="$task_stage/runtime/node_modules/openclaw/dist/entry.js"
 [[ "$("$task_node" "$task_entry" --version)" == *"$task_openclaw_version"* ]] || \
   fail "installed OpenClaw version mismatch"
+mv "$task_stage/runtime" "$task_runtime"
+task_entry="$task_runtime/node_modules/openclaw/dist/entry.js"
 sat_publish_openclaw_launcher "$task_prefix" "$task_node" "$task_entry" \
   "$task_root/scripts/openclaw-environment.sh" || fail "private launcher publication failed"
+printf '%s\n' "manifest=$task_runtime_manifest_sha256 lock=$task_runtime_lock_sha256" \
+  > "$task_stage/runtime-lock"
+chmod 600 "$task_stage/runtime-lock"
+mv "$task_stage/runtime-lock" "$task_prefix/.sat-runtime-lock"
+# A verified new tree replaces the historical global package in an owned prefix.
+task_legacy_package="$task_node_root/lib/node_modules/openclaw"
+if [[ -d "$task_legacy_package" && ! -L "$task_legacy_package" ]]; then
+  rm -rf -- "$task_legacy_package"
+fi
 echo "setup runtime: private OpenClaw is ready"

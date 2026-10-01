@@ -1,17 +1,52 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.5.4",
-  "target_version": "0.5.5",
+  "baseline_version": "0.5.5",
+  "target_version": "0.6.0",
   "changes": [
     {
-      "id": "bounded-question-option-description",
-      "impact": "patch",
-      "summary": "Bound advisory Planning option descriptions before strict validation while retaining raw submission and exact decision values"
+      "id": "canonical-uninstall-command",
+      "impact": "minor",
+      "summary": "Add sat uninstall while retaining the legacy launcher through its documented migration"
     },
     {
-      "id": "nested-correction-diagnostics",
+      "id": "persistent-planning-execution-terminal",
+      "impact": "minor",
+      "summary": "Share an editable persistent terminal across Planning controls and execution with completion and phase authority"
+    },
+    {
+      "id": "journey-wide-observable-progress",
+      "impact": "minor",
+      "summary": "Expand visibility across Planning and execution with actual budget context Git and bounded visible stream previews"
+    },
+    {
+      "id": "planning-description-clean-boundary",
       "impact": "patch",
-      "summary": "Show child validation errors within authorized parent correction slots without widening replacement authority"
+      "summary": "Normalize advisory whitespace before the shared strict description length bound while retaining raw decisions"
+    },
+    {
+      "id": "invocation-budget-admission",
+      "impact": "patch",
+      "summary": "Conservatively reserve the entire paid invocation authorization and wait or refuse subsequent launches after settlement"
+    },
+    {
+      "id": "frozen-runtime-dependencies",
+      "impact": "patch",
+      "summary": "Install one integrity-locked npm tree without unapproved dependency lifecycle scripts"
+    },
+    {
+      "id": "verified-uv-first-install",
+      "impact": "patch",
+      "summary": "Use the shared versioned checksum-verified uv archive installer while preserving existing shared tools"
+    },
+    {
+      "id": "read-only-release-gate",
+      "impact": "patch",
+      "summary": "Separate read-only dependency and quality gates from minimal-permission immutable asset publication"
+    },
+    {
+      "id": "shared-host-git-policy",
+      "impact": "patch",
+      "summary": "Apply the same isolated Git environment and callback policy to host-side consumers and delivery"
     }
   ]
 }

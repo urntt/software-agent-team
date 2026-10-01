@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from uuid import uuid4
 
+from software_agent_team.git_policy import git_command, git_environment
 from software_agent_team.paths import user_state_root
 from software_agent_team.process_lifecycle import (
     ProcessLeaseStore,
@@ -132,7 +133,8 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
 def _git_fact(repository_root: Path) -> dict[str, Any]:
     try:
         revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            git_command(["rev-parse", "HEAD"]),
+            env=git_environment(repository_root),
             cwd=repository_root,
             check=True,
             capture_output=True,
@@ -140,7 +142,8 @@ def _git_fact(repository_root: Path) -> dict[str, Any]:
             timeout=5,
         ).stdout.strip()
         status = subprocess.run(
-            ["git", "status", "--porcelain=v1"],
+            git_command(["status", "--porcelain=v1"]),
+            env=git_environment(repository_root),
             cwd=repository_root,
             check=True,
             capture_output=True,

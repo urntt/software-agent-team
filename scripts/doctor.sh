@@ -45,6 +45,11 @@ trap cleanup EXIT
 [[ "$(sed -n '2p' "$task_openclaw_marker")" == \
   "root=$task_openclaw_prefix" ]] || \
   fail "the SAT OpenClaw runtime marker belongs to another path"
+[[ -f "$task_openclaw_prefix/.sat-runtime-lock" && \
+   ! -L "$task_openclaw_prefix/.sat-runtime-lock" && \
+   "$(cat "$task_openclaw_prefix/.sat-runtime-lock")" == \
+   "manifest=$task_runtime_manifest_sha256 lock=$task_runtime_lock_sha256" ]] || \
+  fail "the frozen runtime dependency identity is missing; run 'make setup'"
 
 task_openclaw_probe_home="$(mktemp -d "${TMPDIR:-/tmp}/sat-doctor.XXXXXX")"
 task_openclaw_version="$(

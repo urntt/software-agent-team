@@ -1156,10 +1156,16 @@ time authority, permission profile, assigned tasks, and dependency
 handoffs; it cannot create Agents, edit the DAG, or extend a user deadline.
 
 Each invocation enters the shared budget ledger atomically before launch. A
-paid call reserves the lesser of its frozen route/token-limit cost estimate and
-the remaining authorized spend; without usable token limits it reserves the
-whole remainder. Active reservations reduce admission headroom. Actual provider
-usage may exceed an estimate, so a provider-side quota is needed for an absolute
+paid invocation reserves the whole remaining authorized spend: a provider
+request's token limits do not bound the number of requests in a tool loop.
+Ready paid Agents wait for settlement and recheck cancellation before admission;
+temporarily occupied funds are distinct from an exhausted or unknown-cost budget.
+Confirmed-zero routes do not occupy spend. This serializes paid model invocations,
+without changing the approved graph, free-route concurrency, or turn limits.
+A known single-request estimate must fit the remainder before a paid launch;
+it is never multiplied by an invented turn count or treated as the invocation cap.
+Actual invocation usage may exceed that authorization before it is returned,
+so a provider-side quota is needed for an absolute
 billing cap. Settlement releases the reservation and records reported tokens,
 duration, and known price. Raw
 stdout/stderr, telemetry, the semantic response reference when valid, and any
@@ -1277,6 +1283,12 @@ when investigating it rather than editing artifacts in place.
 - The controller verifies that each implementation snapshot is clean,
   descendant from the expected base, and limited to its exact changed-file
   set.
+- Host Git operations share one minimal environment/config policy: ambient
+  configuration, credential helpers, hooks, fsmonitor, and signing callbacks are
+  disabled. Transport is local-only except managed installation's explicit
+  HTTPS allowance. Delivery rejects local/include hook, filter, and fsmonitor
+  configuration before cloning or checkout; workspace safety retains the same
+  refusal. No blanket `safe.directory` exemption is added.
 - Submodules, executable hooks, external Git filters, and unsafe fsmonitor
   configuration are rejected before checkout.
 - The harness does not merge, push, deploy, or publish generated results.

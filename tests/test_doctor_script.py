@@ -40,6 +40,18 @@ def prepare(root: Path) -> dict[str, str]:
         f"software-agent-team-openclaw-runtime-v1\nroot={prefix}\n",
         encoding="utf-8",
     )
+    pins = dict(
+        line.split("=", 1)
+        for line in (root / "configs/toolchain.sh").read_text().splitlines()
+        if line.startswith("task_runtime_")
+    )
+    (prefix / ".sat-runtime-lock").write_text(
+        "manifest="
+        + pins["task_runtime_manifest_sha256"].strip('"')
+        + " lock="
+        + pins["task_runtime_lock_sha256"].strip('"')
+        + "\n"
+    )
     uv = root / ".sat/uv"
     uv.write_text("#!/bin/sh\necho 3.12\n", encoding="utf-8")
     uv.chmod(0o700)
