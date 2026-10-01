@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import socket
-import subprocess
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -30,6 +29,10 @@ from software_agent_team.execution import (
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.quality_gates import load_quality_gate_configuration
 from software_agent_team.runtime_configuration import materialize_run_configuration
+from software_agent_team.sandbox_lifecycle import (
+    cleanup_sat_sandbox_sessions,
+    inspect_sat_sandbox_resources,
+)
 from software_agent_team.submissions import (
     AgentSubmissionContract,
     AgentSubmissionPurpose,
@@ -364,87 +367,46 @@ def validation_exit_code(validation: Mapping[str, object]) -> int:
     return 0 if validation.get("passed") is True else 2
 
 
-def sandbox_container_ids(docker_binary: str, session_key: str) -> list[str]:
-    """Return full IDs for only the exact disposable validation session."""
+def sandbox_container_ids(docker_binary: str, state_root: Path) -> list[str]:
+    """Observe the disposable scenario through the shared mount-ownership owner."""
 
-    completed = subprocess.run(
-        [
-            docker_binary,
-            "ps",
-            "--all",
-            "--quiet",
-            "--no-trunc",
-            "--filter",
-            f"label=openclaw.sessionKey={session_key}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
+    observation = inspect_sat_sandbox_resources(
+        sandbox_binary=docker_binary, state_root=state_root
     )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "could not inventory the exact loopback sandbox: "
-            f"{completed.stderr[-1000:]}"
-        )
-    return sorted({line for line in completed.stdout.splitlines() if line})
-
-
-def remove_sandbox_containers(
-    docker_binary: str, session_key: str
-) -> dict[str, object]:
-    """Remove and verify only containers carrying the exact session label."""
-
-    before = sandbox_container_ids(docker_binary, session_key)
-    actions = []
-    for container_id in before:
-        completed = subprocess.run(
-            [docker_binary, "rm", "--force", container_id],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        actions.append(
-            {
-                "container_id": container_id,
-                "exit_code": completed.returncode,
-                "stdout": completed.stdout.strip(),
-                "stderr": completed.stderr.strip(),
-            }
-        )
-    after = sandbox_container_ids(docker_binary, session_key)
-    return {
-        "session_key": session_key,
-        "container_ids_before_cleanup": before,
-        "container_created": bool(before),
-        "actions": actions,
-        "container_ids_after_cleanup": after,
-        "completed": not after and all(action["exit_code"] == 0 for action in actions),
-    }
+    return sorted(item.container_id for item in observation.containers)
 
 
 def remove_sandbox_sessions(
     docker_binary: str,
     session_keys: Sequence[str],
+    *,
+    state_root: Path,
 ) -> dict[str, object]:
-    """Remove an exact set of disposable validation sessions."""
+    """Recover actual cache labels only inside this scenario's private state."""
 
-    cleanups = [
-        remove_sandbox_containers(docker_binary, session_key)
-        for session_key in dict.fromkeys(session_keys)
-    ]
+    before = inspect_sat_sandbox_resources(
+        sandbox_binary=docker_binary, state_root=state_root
+    )
+    actual_keys = sorted({item.session_key for item in before.containers})
+    removed = (
+        cleanup_sat_sandbox_sessions(
+            sandbox_binary=docker_binary,
+            session_keys=actual_keys,
+            state_root=state_root,
+        ).removed
+        if actual_keys
+        else ()
+    )
+    after = sandbox_container_ids(docker_binary, state_root)
     return {
         "session_keys": list(dict.fromkeys(session_keys)),
-        "sessions": cleanups,
-        "container_ids_after_cleanup": sorted(
-            {
-                container_id
-                for cleanup in cleanups
-                for container_id in cleanup["container_ids_after_cleanup"]
-            }
+        "observed_session_keys": actual_keys,
+        "container_ids_before_cleanup": sorted(
+            item.container_id for item in before.containers
         ),
-        "completed": all(cleanup["completed"] is True for cleanup in cleanups),
+        "removed_container_ids": sorted(item.container_id for item in removed),
+        "container_ids_after_cleanup": after,
+        "completed": not after,
     }
 
 
@@ -869,13 +831,7 @@ def execute_scenario(
             else ((request, request) if scenario == "continuation" else (request,))
         )
         session_keys = tuple(item.session_key for item in requests)
-        containers_before_launch = sorted(
-            {
-                container_id
-                for session_key in dict.fromkeys(session_keys)
-                for container_id in sandbox_container_ids(docker_binary, session_key)
-            }
-        )
+        containers_before_launch = sandbox_container_ids(docker_binary, state)
         if containers_before_launch:
             raise RuntimeError(
                 "fresh loopback session key already owns containers: "
@@ -934,7 +890,9 @@ def execute_scenario(
                 if result.status.value != "completed":
                     break
         except Exception as error:  # pragma: no cover - exercised by the live tool
-            sandbox_cleanup = remove_sandbox_sessions(docker_binary, session_keys)
+            sandbox_cleanup = remove_sandbox_sessions(
+                docker_binary, session_keys, state_root=state
+            )
             return {
                 "scenario": scenario,
                 "status": "validation_exception",
@@ -952,7 +910,9 @@ def execute_scenario(
                 "sandbox_containers_before_launch": containers_before_launch,
                 "sandbox_cleanup": sandbox_cleanup,
             }
-        sandbox_cleanup = remove_sandbox_sessions(docker_binary, session_keys)
+        sandbox_cleanup = remove_sandbox_sessions(
+            docker_binary, session_keys, state_root=state
+        )
 
     final_invocation = invocations[-1]
     return {

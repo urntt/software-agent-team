@@ -172,6 +172,15 @@ uv run --frozen python -m software_agent_team.loopback_validation \
   --output /absolute/private/evidence/loopback.json
 ```
 
+Loopback cleanup observes containers through the scenario's dedicated state
+mounts, then uses the shared sandbox lifecycle owner to remove the actual
+observed cache labels. OpenClaw can append a workspace fingerprint to an
+invocation session key; an empty exact-invocation label query is not proof of
+cleanup. Cleanup failures fail the gate, and containers mounted outside the
+scenario state remain untouched. PTY cancellation fixtures also persist process
+leases and recover and reap the isolated executor child when their controller
+is forcibly stopped during test teardown.
+
 For the pinned SQLite compression boundary, select only
 `--scenario submission-contract --prompt-padding-chars 100000` and inspect
 the retained session store for an `event_zstd` row. This drives the actual

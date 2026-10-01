@@ -2,13 +2,104 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from copy import deepcopy
+from pathlib import Path
+
+import pytest
+from test_sandbox_lifecycle import sandbox_record
 
 from software_agent_team.loopback_validation import (
     MODEL,
+    remove_sandbox_sessions,
+    sandbox_container_ids,
     validate_matrix,
     validation_exit_code,
 )
+from software_agent_team.sandbox_lifecycle import SandboxCleanupError
+
+
+def disposable_docker(tmp_path: Path, *, fail_remove: bool = False):
+    """Replace Docker IO while exercising the shared production cleanup chain."""
+
+    state = tmp_path / "scenario-state"
+    base = "agent:planner:sat-loopback-owned-i1-implementation-plan"
+    cache_label = f"{base}:workspace:0123456789abcdef"
+    records = [
+        sandbox_record(
+            container_id="a" * 64,
+            session_key=cache_label,
+            source=state / "sandboxes/workspace-cache",
+        ),
+        sandbox_record(
+            container_id="b" * 64,
+            session_key=base,
+            source=tmp_path / "foreign-state/sandboxes/cache",
+        ),
+    ]
+    inventory = tmp_path / "docker-inventory.json"
+    inventory.write_text(json.dumps(records))
+    binary = tmp_path / "docker"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        f"inventory = Path({str(inventory)!r})\n"
+        "records = json.loads(inventory.read_text())\n"
+        "argv = sys.argv[1:]\n"
+        "if argv[:2] == ['container', 'ls']:\n"
+        "    filters = [x.removeprefix('label=openclaw.sessionKey=') for x in argv "
+        "if x.startswith('label=openclaw.sessionKey=')]\n"
+        "    print('\\n'.join(x['Id'] for x in records if not filters "
+        "or x['Config']['Labels']['openclaw.sessionKey'] == filters[0]))\n"
+        "elif argv[:2] == ['container', 'inspect']:\n"
+        "    print(json.dumps([x for x in records if x['Id'] in argv[2:]]))\n"
+        "elif argv[:2] == ['container', 'rm']:\n"
+        f"    if {fail_remove!r}: sys.exit(1)\n"
+        "    inventory.write_text(json.dumps([x for x in records "
+        "if x['Id'] != argv[-1]]))\n"
+        "else:\n"
+        "    raise RuntimeError('unexpected Docker boundary: ' + repr(argv))\n"
+    )
+    binary.chmod(0o755)
+    return binary, state, base, inventory
+
+
+def test_loopback_recovers_workspace_cache_and_preserves_foreign_state(
+    tmp_path: Path,
+) -> None:
+    binary, state, base, inventory = disposable_docker(tmp_path)
+    assert sandbox_container_ids(str(binary), state) == ["a" * 64]
+
+    result = remove_sandbox_sessions(str(binary), [base], state_root=state)
+
+    assert result["completed"] is True
+    assert result["container_ids_before_cleanup"] == ["a" * 64]
+    assert result["removed_container_ids"] == ["a" * 64]
+    assert result["container_ids_after_cleanup"] == []
+    assert [x["Id"] for x in json.loads(inventory.read_text())] == ["b" * 64]
+
+
+@pytest.mark.parametrize("foreign_collision", [False, True])
+def test_loopback_cleanup_refuses_failed_delete_or_foreign_label_collision(
+    tmp_path: Path, foreign_collision: bool
+) -> None:
+    binary, state, base, inventory = disposable_docker(
+        tmp_path, fail_remove=not foreign_collision
+    )
+    if foreign_collision:
+        records = json.loads(inventory.read_text())
+        records[1]["Config"]["Labels"] = records[0]["Config"]["Labels"]
+        inventory.write_text(json.dumps(records))
+
+    with pytest.raises(SandboxCleanupError):
+        remove_sandbox_sessions(str(binary), [base], state_root=state)
+
+    assert [x["Id"] for x in json.loads(inventory.read_text())] == [
+        "a" * 64,
+        "b" * 64,
+    ]
 
 
 def outcome(scenario: str) -> dict[str, object]:
