@@ -764,7 +764,13 @@ rollback has settled. A cached sandbox container can prevent Docker from
 removing the last predecessor tag. This defers reclamation rather than failing
 a verified activation: the handoff retains the exact temporary reference and
 immutable image identity, and subsequent startup retries removal after those
-containers release the image. SAT never forces image deletion. Activation owns
+containers release the image. Before another installer writes its handoff, SAT
+moves outstanding transactions intact to separate transaction identities. The
+active updater retries those records even after their original release or
+channel has changed; an old candidate need not remain active. Older targets'
+original handoffs remain readable: the updater keeps its added rollback anchor
+in a separate transaction record instead of adding an unsupported field to the
+old target's handoff. SAT never forces image deletion. Activation owns
 image rollback once under the update lock; if recovery also fails, diagnostics
 retain both bounded activation and rollback causes. If staging and image
 rollback both fail, the installer reports both bounded install-owned causes. When both releases use one mutable

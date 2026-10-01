@@ -670,6 +670,7 @@ def _stage_managed_target_locked(
     _require_managed_root(paths)
     _validate_managed_destination(paths)
     _preflight_advertised_persisted_state(target, paths)
+    _retire_pending_sandbox_image_transitions(paths.managed_root)
     paths.versions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     _require_real_directory(paths.versions_root, "managed versions root")
     stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=paths.versions_root)).resolve()
@@ -855,8 +856,16 @@ def _stage_managed_target_locked(
                     )
                 ):
                     raise ManagedInstallError("staged sandbox image handoff changed")
+                # An older target cannot read the new optional field. Keep its
+                # handoff byte-compatible and place the anchor in the retired
+                # transaction namespace owned by the current updater instead.
+                anchor_path = (
+                    handoff_path
+                    if "rollback_reference" in handoff.model_fields_set
+                    else _retired_sandbox_image_transition_path(paths.managed_root)
+                )
                 _write_sandbox_image_transition(
-                    handoff_path,
+                    anchor_path,
                     PersistedSandboxImageTransition.model_validate(
                         {
                             **handoff.model_dump(),
@@ -1704,6 +1713,7 @@ def prepare_staged_sandbox_image_transition(
             identity.image_id for identity in previous_lineage
         ),
     )
+    _retire_pending_sandbox_image_transitions(managed_root)
     record = PersistedSandboxImageTransition(
         target_source_revision=marker.source_revision,
         previous_reference=previous_reference,
@@ -1808,13 +1818,17 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
             current_lifecycle = _active_managed_lifecycle(project_root)
             if current_lifecycle != lifecycle:
                 return False
+            retired_complete = _reconcile_retired_sandbox_image_transitions(
+                managed_root,
+                current_reference=_configured_sandbox_image(project_root),
+            )
             path = _sandbox_image_transition_path(
                 managed_root,
                 release_marker.source_revision,
             )
             transition = _load_sandbox_image_transition(path)
             if transition is None:
-                return True
+                return retired_complete
             if transition.target_source_revision != release_marker.source_revision:
                 raise ManagedInstallError(
                     "managed sandbox image transition belongs to another release"
@@ -1845,7 +1859,7 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
                 item.to_runtime() for item in transition.candidate_lineage
             )
             previous_reference = transition.resolved_previous_reference
-            complete = True
+            complete = retired_complete
             if transition.rollback_reference is not None:
                 released = _release_sandbox_image_rollback_reference(
                     SandboxImageTransition(
@@ -1872,7 +1886,7 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
                         "retired sandbox image differs from its pending transition"
                     )
                 if previous_reference == transition.reference:
-                    complete = _remove_attributable_unreferenced_lineage(
+                    previous_complete = _remove_attributable_unreferenced_lineage(
                         previous.to_runtime(),
                         expected_reference=previous_reference,
                         retired_lineage=tuple(
@@ -1880,6 +1894,7 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
                         ),
                         retained_lineage=retained_lineage,
                     )
+                    complete = previous_complete and complete
                 elif current_previous is None:
                     raise ManagedInstallError(
                         "rollback sandbox image disappeared after activation"
@@ -1926,6 +1941,111 @@ def reconcile_pending_sandbox_image_transition(project_root: Path) -> bool:
         if str(error) == "a SAT task, managed install, or update is active":
             return False
         raise
+
+
+def _retire_pending_sandbox_image_transitions(managed_root: Path) -> None:
+    """Move prior handoffs before a new installer can overwrite their source slot."""
+
+    pending = tuple(
+        sorted(managed_root.glob(f"{SANDBOX_IMAGE_TRANSITION_FILE_PREFIX}*.json"))
+    )
+    retired = tuple(managed_root.glob(".sat-sandbox-image-retired-*.json"))
+    if len(pending) + len(retired) > 64:
+        raise ManagedInstallError("too many pending sandbox image transitions")
+    for path in pending:
+        transition = _load_sandbox_image_transition(path)
+        if transition is None:
+            continue
+        if path != _sandbox_image_transition_path(
+            managed_root, transition.target_source_revision
+        ):
+            raise ManagedInstallError("pending sandbox image transition path changed")
+        destination = _retired_sandbox_image_transition_path(managed_root)
+        if destination.exists() or destination.is_symlink():
+            raise ManagedInstallError("retired sandbox image transition already exists")
+        os.replace(path, destination)
+
+
+def _retired_sandbox_image_transition_path(managed_root: Path) -> Path:
+    """Allocate one transaction identity independent of release or channel."""
+
+    return managed_root / f".sat-sandbox-image-retired-{uuid4().hex}.json"
+
+
+def _reconcile_retired_sandbox_image_transitions(
+    managed_root: Path,
+    *,
+    current_reference: str | None,
+) -> bool:
+    """Reclaim recorded predecessor resources without requiring an old active app."""
+
+    paths = tuple(sorted(managed_root.glob(".sat-sandbox-image-retired-*.json")))
+    if len(paths) > 64:
+        raise ManagedInstallError("too many retired sandbox image transitions")
+    if not paths:
+        return True
+    if current_reference is None:
+        return False
+    candidate = _inspect_sandbox_image(current_reference)
+    if candidate is None or not candidate.owned:
+        raise ManagedInstallError(
+            "active sandbox image is unavailable for retired cleanup"
+        )
+    retained_lineage = _inspect_sandbox_image_lineage(
+        candidate, expected_reference=current_reference
+    )
+    complete = True
+    for path in paths:
+        if (
+            re.fullmatch(r"\.sat-sandbox-image-retired-[0-9a-f]{32}\.json", path.name)
+            is None
+        ):
+            raise ManagedInstallError(
+                "retired sandbox image transition path is invalid"
+            )
+        record = _load_sandbox_image_transition(path)
+        if record is None:
+            continue
+        previous = record.previous
+        reference = record.resolved_previous_reference
+        released = _release_sandbox_image_rollback_reference(
+            SandboxImageTransition(
+                reference=reference,
+                previous=None if previous is None else previous.to_runtime(),
+                previous_lineage=(),
+                candidate=candidate,
+                candidate_lineage=retained_lineage,
+                rollback_reference=record.rollback_reference,
+            )
+        )
+        if not released:
+            complete = False
+            continue
+        reclaimed = True
+        if previous is not None:
+            reclaimed = _remove_attributable_unreferenced_lineage(
+                previous.to_runtime(),
+                expected_reference=reference,
+                retired_lineage=tuple(
+                    item.to_runtime() for item in record.previous_lineage
+                ),
+                retained_lineage=retained_lineage,
+            )
+        for legacy in record.legacy_orphan_lineages:
+            reclaimed = (
+                _remove_attributable_unreferenced_lineage(
+                    legacy.root.to_runtime(),
+                    expected_reference=reference,
+                    retired_lineage=tuple(item.to_runtime() for item in legacy.lineage),
+                    retained_lineage=retained_lineage,
+                    allow_reference_labeled_root=True,
+                )
+                and reclaimed
+            )
+        if reclaimed:
+            _remove_sandbox_image_transition(path)
+        complete = reclaimed and complete
+    return complete
 
 
 def _active_managed_lifecycle(

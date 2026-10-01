@@ -1688,7 +1688,16 @@ def test_failed_stage_anchors_previous_image_until_rollback(
 
 
 @pytest.mark.parametrize(
-    "outcome", ["success", "container_reference", "probe_failure", "rollback_failure"]
+    "outcome",
+    [
+        "success",
+        "container_reference",
+        "probe_failure",
+        "rollback_failure",
+        "repeat_same_source",
+        "repeat_new_source",
+        "legacy_handoff",
+    ],
 )
 def test_successful_stage_releases_image_anchor_after_activation(
     tmp_path: Path,
@@ -1710,7 +1719,12 @@ def test_successful_stage_releases_image_anchor_after_activation(
     candidate_id = "sha256:" + "b" * 64
     references = {reference: previous_id}
     retired: list[str] = []
-    container_references = {"present": outcome == "container_reference"}
+    container_references = {
+        "present": (
+            outcome in {"container_reference", "legacy_handoff"}
+            or outcome.startswith("repeat_")
+        )
+    }
     restore_calls: list[str] = []
 
     def inspect(
@@ -1790,6 +1804,13 @@ def test_successful_stage_releases_image_anchor_after_activation(
                 application_root=cwd,
                 installation_record_path=install_paths.installation_record,
             )
+            if outcome == "legacy_handoff":
+                legacy_path = managed_install_module._sandbox_image_transition_path(
+                    install_paths.managed_root, revision
+                )
+                legacy = json.loads(legacy_path.read_text())
+                legacy.pop("rollback_reference")
+                legacy_path.write_text(json.dumps(legacy))
             assert cwd is not None
             (cwd / ".sat").mkdir(exist_ok=True)
             engine = current_docker_engine()
@@ -1813,7 +1834,11 @@ def test_successful_stage_releases_image_anchor_after_activation(
     monkeypatch.setattr(
         managed_install_module,
         "_remove_attributable_unreferenced_lineage",
-        lambda image, **_kwargs: retired.append(image.image_id) or True,
+        lambda image, **kwargs: (
+            (image.image_id in {x.image_id for x in kwargs["retained_lineage"]})
+            or retired.append(image.image_id)
+            or True
+        ),
     )
 
     if outcome in {"probe_failure", "rollback_failure"}:
@@ -1850,8 +1875,18 @@ def test_successful_stage_releases_image_anchor_after_activation(
     )
     handoff = managed_install_module._load_sandbox_image_transition(handoff_path)
     assert handoff is not None
+    if outcome == "legacy_handoff":
+        assert "rollback_reference" not in json.loads(handoff_path.read_text())
+        anchored = list(
+            install_paths.managed_root.glob(".sat-sandbox-image-retired-*.json")
+        )
+        assert len(anchored) == 1
+        handoff = managed_install_module._load_sandbox_image_transition(anchored[0])
+        assert handoff is not None
     assert handoff.rollback_reference is not None
-    if outcome == "container_reference":
+    if outcome in {"container_reference", "legacy_handoff"} or outcome.startswith(
+        "repeat_"
+    ):
         assert references[reference] == candidate_id
         assert references[handoff.rollback_reference] == previous_id
         assert retired == []
@@ -1859,13 +1894,85 @@ def test_successful_stage_releases_image_anchor_after_activation(
             install_paths.application_link.resolve()
         )
         assert handoff_path.exists()
+        if outcome.startswith("repeat_"):
+            original_bytes = handoff_path.read_bytes()
+            if outcome == "repeat_same_source":
+                git(repository, "branch", "alternate")
+                next_target = dev_target(repository, revision).model_copy(
+                    update={"source_ref": "alternate"}
+                )
+            else:
+                (repository / "next.txt").write_text("new revision\n")
+                git(repository, "add", ".")
+                git(repository, "commit", "-m", "test: advance revision")
+                next_target = dev_target(
+                    repository, git(repository, "rev-parse", "HEAD")
+                )
+            install_managed_target(next_target, install_paths, command_runner=run)
+            preserved = list(
+                install_paths.managed_root.glob(".sat-sandbox-image-retired-*.json")
+            )
+            assert len(preserved) == 1 and preserved[0].read_bytes() == original_bytes
+            assert references[handoff.rollback_reference] == previous_id
+            assert (
+                not managed_install_module.reconcile_pending_sandbox_image_transition(
+                    install_paths.application_link.resolve()
+                )
+            )
+            assert preserved[0].exists()
         container_references["present"] = False
         assert managed_install_module.reconcile_pending_sandbox_image_transition(
             install_paths.application_link.resolve()
         )
         assert not handoff_path.exists()
     assert references == {reference: candidate_id}
-    assert retired == [previous_id]
+    assert set(retired) == {previous_id}
+
+
+def test_pending_handoff_with_foreign_uid_anchor_is_preserved_and_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_paths = paths(tmp_path)
+    mark_managed_root(install_paths)
+    image = managed_install_module.SandboxImageIdentity(
+        image_id="sha256:" + "a" * 64,
+        parent_image_id=None,
+        repository_tags=(),
+        owned=True,
+    )
+    previous = managed_install_module.PersistedSandboxImageIdentity.from_runtime(
+        image
+    ).model_dump()
+    payload = {
+        "schema_version": 1,
+        "target_source_revision": "1" * 40,
+        "reference": "sat-python-quality:phase1-v10",
+        "previous": previous,
+        "previous_lineage": [previous],
+        "rollback_reference": f"software-agent-team-rollback:u{os.geteuid() + 1}-"
+        + "c" * 32,
+    }
+    handoff = managed_install_module._sandbox_image_transition_path(
+        install_paths.managed_root, "1" * 40
+    )
+    original = json.dumps(payload).encode()
+    handoff.write_bytes(original)
+    monkeypatch.setattr(
+        managed_install_module,
+        "_docker_command",
+        lambda *_a, **_k: pytest.fail(
+            "foreign anchor must never reach Docker mutation"
+        ),
+    )
+    with pytest.raises(ManagedInstallError):
+        managed_install_module._retire_pending_sandbox_image_transitions(
+            install_paths.managed_root
+        )
+    assert handoff.read_bytes() == original
+    assert not list(
+        install_paths.managed_root.glob(".sat-sandbox-image-retired-*.json")
+    )
 
 
 @pytest.mark.parametrize("failure", ["referenced", "unreferenced", "changed"])

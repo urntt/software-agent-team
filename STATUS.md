@@ -9,21 +9,25 @@ status narrative remains available through the [historical source map](docs/hist
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.4`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.4),
-tagged at `61a9ecf8a7aa5f19ced28b8466d801f865ccff42`. Its read-only exact-tag
-gate and separate publisher succeeded. Both official assets match their GitHub
-digests and the exact source archive. The hosted gate passed **2,047 tests**
-with four environment skips, all four stages and attributable cleanup passed.
-The same execution code at `83e14e5` passed **2,050 tests** with one root-only
-skip on Linux with the actual sandbox image; its only later changes were
-release metadata, package version and status documentation. That earlier gate
-is not presented as an exact-revision result for the new tag.
+The latest published stable release is [`v0.6.5`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.5),
+tagged at `817e430c0cf81c88cf35441ea2dc023ca54a0d60`. Its normal exact-tag gate
+and publisher succeeded: hosted canonical passed 2,054 tests with four
+environment skips; the clean Linux candidate passed 2,057 with one root-only
+skip. Official asset and source-archive digests were verified.
 
-The immutable `v0.6.3` tag passed canonical checks, but its manifest gate
-rejected stale change-impact metadata. It was never published. The metadata
-was corrected for `v0.6.4` before its successful normal publication. The retained
-ordinary account is updating from public `v0.6.2` to `v0.6.4`; user delivery,
-independent browser acceptance and final export/uninstall are still pending.
+A retained public 0.6.2 installation was refreshed to the fixed dev candidate
+and switched to published 0.6.5 stable. Both activations passed and 3,181
+configuration/run files stayed identical. Repeating installation then exposed
+an incomplete cleanup handoff: a container-referenced rollback tag survived
+while its source-keyed journal was overwritten. The checkout preserves pending
+handoffs as individual retired transactions and retries them under the current
+updater, without requiring their original candidate to remain active. Older
+targets retain their original readable handoff shape. Focused/canonical and
+public validation of this continuation are pending; no new model task, delivery,
+browser acceptance or final export/uninstall is claimed.
+
+The immutable v0.6.3 tag was never published because its manifest gate rejected
+stale impact metadata; the correction was normally published as v0.6.4.
 
 The previous `v0.6.0` ordinary-account journey completed public installation,
 first provider setup/check, subsequent startup, nine real DeepSeek Planning
@@ -66,16 +70,6 @@ checks remain unchanged. The immutable v0.6.3 tag passed canonical tests but
 publication was rejected because its impact target was stale. The v0.6.4
 candidate corrects only release metadata and retains the tested execution code.
 Publication alone does not establish user-flow success.
-
-The checkout also repairs managed upgrade activation when a cached sandbox
-container still references the predecessor image. Its exact temporary rollback
-tag is retained in the pending handoff until no-force reclamation can complete.
-Activation rollback has one owner under the update lock and reports both causes
-when recovery fails. Focused managed-install/bootstrap/update checks passed 85 cases;
-canonical and public release validation for this change is pending;
-the public v0.6.4 update engine does not contain it. Rerunning the latest
-published installer refreshes the updater without deleting configuration or
-run history.
 
 ## Implemented in the checkout
 
