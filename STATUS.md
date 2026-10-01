@@ -50,8 +50,14 @@ establish the current release's provider-backed behavior.
   and passes checked assets to a separate publisher. Focused Planning/budget/
   runner checks passed 401 tests; lifecycle/permission checks passed 59, and
   budget/lock/release authority checks passed 57. These suites overlap. Fresh
-  locked-runtime compatibility, the final canonical gate, publication, and the
-  ordinary-user journey remain pending; the published release is still `0.5.5`.
+  locked-runtime installation and both real OpenClaw localhost transport cases
+  passed. The clean Linux candidate `e4d329fc27dbd6426942f73e4416728a83fe272c`
+  passed the canonical gate with **2,026 tests passing**, one root-only fixture
+  skipped, and successful doctor, formatting, and lint stages. Stage processes,
+  temporary directories, leases, and attributable Docker resources were clean
+  afterward. Publication and the ordinary-user journey remain pending; the
+  published release is still `0.5.5`. ARM64/WSL installation and optional native
+  OpenClaw integrations are not established by these Linux x86_64 checks.
 - The checkout adds `sat uninstall`, persistent shared Planning/execution
   controls with completion and multiline editing, journey-wide visibility,
   read-only elapsed/budget/context/Git telemetry, and bounded visible tool/model
