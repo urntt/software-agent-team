@@ -21,6 +21,26 @@ _REASONING = re.compile(
 )
 
 
+def colorize_metrics(lines: Iterable[str], *, color: bool) -> list[str]:
+    """Apply the shared Planning/execution palette to display-only totals."""
+
+    result = []
+    palette = {
+        "Run": "1;36",
+        "Budget": "32",
+        "Cost": "33",
+        "Context": "34",
+        "Git": "35",
+    }
+    for line in lines:
+        code = palette.get(line.partition(" · ")[0])
+        if color and code is not None:
+            result.append(f"\x1b[{code}m{line}\x1b[0m")
+        else:
+            result.append(line)
+    return result
+
+
 def display_text(value: str, *, limit: int = 600, tail: bool = False) -> str:
     """Redact credential-shaped text, remove reasoning tags, and bound output."""
 

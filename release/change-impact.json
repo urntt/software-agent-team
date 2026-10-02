@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.9",
-  "target_version": "0.6.10",
+  "baseline_version": "0.6.10",
+  "target_version": "0.6.11",
   "changes": [
     {
-      "id": "deferred-sdk-model-auth-readiness",
+      "id": "terminal-live-region-separation-and-colors",
       "impact": "patch",
-      "summary": "Verify deferred catalog availability through the pinned SDK local readiness check for the exact authorized model and Agent, preserving credentials, runtime configuration, bounded timeouts and safe diagnostics"
+      "summary": "Reserve one blank row between scrollback and live panels, and share readable colors for Planning and execution totals, waiting states and detail headings while preserving command drafts and color preferences"
     }
   ]
 }

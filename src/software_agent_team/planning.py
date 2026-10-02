@@ -163,7 +163,10 @@ from software_agent_team.teams import (
 )
 from software_agent_team.terminal_dashboard import TerminalDashboard
 from software_agent_team.terminal_metrics import TerminalRunMetrics
-from software_agent_team.terminal_presentation import InvocationPresentation
+from software_agent_team.terminal_presentation import (
+    InvocationPresentation,
+    colorize_metrics,
+)
 
 PLANNING_SCHEMA_VERSION = 23
 MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
@@ -1101,11 +1104,18 @@ class TerminalPlanningProgress:
         ):
             return []
         detail = self._presentation
-        lines = ["Planning details"]
+        lines = [self._colorize("Planning details", "1;36")]
         if detail.tool is not None:
-            lines.append("Tool / command: " + detail.tool.label)
+            lines.append(
+                self._colorize(
+                    self._fit(
+                        "Tool / command: " + detail.tool.label, self._terminal_columns()
+                    ),
+                    "35",
+                )
+            )
             lines.extend("  " + line for line in detail.tool.arguments.splitlines()[:1])
-            lines.append("Result / output:")
+            lines.append(self._colorize("Result / output:", "34"))
             lines.extend(
                 "  " + line
                 for line in detail.tool.result.splitlines()[:1]
@@ -1115,13 +1125,20 @@ class TerminalPlanningProgress:
                     else "waiting for the tool result"
                 ]
             )
-        lines.append("Model " + ("stream:" if detail.streaming else "output:"))
+        lines.append(
+            self._colorize(
+                "Model " + ("stream:" if detail.streaming else "output:"), "36"
+            )
+        )
         lines.extend(
             "  " + line
             for line in detail.model_text.splitlines()[:2]
             or ["no visible text reported"]
         )
-        return [self._fit(line, self._terminal_columns()) for line in lines]
+        return [
+            self._fit(line, self._terminal_columns()) if "\x1b" not in line else line
+            for line in lines
+        ]
 
     def _write_live_lines_locked(self) -> None:
         lines = self._live_lines_locked()
@@ -1137,7 +1154,13 @@ class TerminalPlanningProgress:
             return []
         if self._waiting is None:
             return (
-                self.metrics()
+                colorize_metrics(
+                    (
+                        self._fit(line, self._terminal_columns())
+                        for line in self.metrics()
+                    ),
+                    color=self.color_enabled,
+                )
                 if self.metrics is not None
                 and self.visibility is not RunEventVisibility.COMPACT
                 else []
@@ -1166,7 +1189,13 @@ class TerminalPlanningProgress:
                     f"{symbol} Planning  {state}  {minutes:02d}:{seconds:02d}",
                     width,
                 ),
-                "1;36",
+                "1;33"
+                if activity.kind
+                in {
+                    PlanningActivityKind.PROVIDER_WAIT,
+                    PlanningActivityKind.WAITING_MODEL,
+                }
+                else "1;36",
             ),
             self._fit(
                 f"  {branch} attempt {observation.attempt_label} {dot} "
@@ -1182,7 +1211,13 @@ class TerminalPlanningProgress:
             self.visibility is not RunEventVisibility.COMPACT
             and self.metrics is not None
         ):
-            lines = [*self.metrics(), *lines]
+            lines = [
+                *colorize_metrics(
+                    (self._fit(line, width) for line in self.metrics()),
+                    color=self.color_enabled,
+                ),
+                *lines,
+            ]
         if self._dashboard is None:
             lines.extend(self._presentation_lines_locked())
         return [

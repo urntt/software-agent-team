@@ -102,8 +102,12 @@ class TerminalDashboard:
             menu_height = (
                 0 if completions is None else min(3, len(completions.completions))
             )
-            rows = max(1, self.output.get_size().rows - 6 - detail_height - menu_height)
-            lines = self.live_lines()
+            rows = max(1, self.output.get_size().rows - 7 - detail_height - menu_height)
+            lines = list(self.live_lines())
+            # The layout owns the scrollback boundary, including when a callback
+            # has no live observation or changes its leading padding.
+            while lines and not lines[0].strip():
+                lines.pop(0)
             if len(lines) > rows:
                 lines = [
                     *lines[: max(0, rows - 1)],
@@ -114,6 +118,7 @@ class TerminalDashboard:
         editor = BufferControl(buffer=self.buffer)
         layout = HSplit(
             [
+                Window(height=1),
                 Window(FormattedTextControl(panel), dont_extend_height=True),
                 Window(
                     FormattedTextControl(

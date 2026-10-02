@@ -34,7 +34,10 @@ from software_agent_team.invocation_lifecycle import InvocationPhase
 from software_agent_team.run_control import RunPhase
 from software_agent_team.terminal_dashboard import TerminalDashboard
 from software_agent_team.terminal_metrics import TerminalRunMetrics
-from software_agent_team.terminal_presentation import InvocationPresentation
+from software_agent_team.terminal_presentation import (
+    InvocationPresentation,
+    colorize_metrics,
+)
 
 RUN_EVENT_SCHEMA_VERSION = 6
 MINIMUM_READABLE_RUN_EVENT_SCHEMA_VERSION = 2
@@ -1818,7 +1821,17 @@ class TerminalProgressRenderer:
                 f"{event.agent_id}{stage}  {state_text}  {minutes:02d}:{seconds:02d}"
             )
             block = [
-                self._colorize(self._fit(status, width), "1;36"),
+                self._colorize(
+                    self._fit(status, width),
+                    "1;33"
+                    if state
+                    in {
+                        AgentRunState.WAITING_PROVIDER,
+                        AgentRunState.WAITING_DEPENDENCY,
+                        AgentRunState.PAUSED,
+                    }
+                    else "1;" + self._event_color(event.kind),
+                ),
                 self._fit(f"  {branch} {event.summary}", width),
             ]
             checkpoint = event.checkpoint
@@ -1864,7 +1877,13 @@ class TerminalProgressRenderer:
             self.visibility is not RunEventVisibility.COMPACT
             and self.metrics is not None
         ):
-            lines = [*self.metrics(), *lines]
+            lines = [
+                *colorize_metrics(
+                    (self._fit(line, width) for line in self.metrics()),
+                    color=self.color_enabled,
+                ),
+                *lines,
+            ]
         if self.visibility is RunEventVisibility.DETAILED and self._dashboard is None:
             for agent_id, (model, presentation) in sorted(self._presentations.items()):
                 lines.extend(
@@ -1888,17 +1907,25 @@ class TerminalProgressRenderer:
         ]
         if presentation.tool is not None:
             tool = presentation.tool
-            lines.append(self._fit("  Tool / command: " + tool.label, width))
+            lines.append(
+                self._colorize(
+                    self._fit("  Tool / command: " + tool.label, width), "35"
+                )
+            )
             for line in tool.arguments.splitlines()[:1]:
                 lines.append(self._fit("    " + line, width))
-            lines.append("  Result / command output:")
+            lines.append(self._colorize("  Result / command output:", "34"))
             for line in tool.result.splitlines()[:1] or [
                 "completed; no text output"
                 if tool.completed
                 else "waiting for the tool result"
             ]:
                 lines.append(self._fit("    " + line, width))
-        lines.append("  Model " + ("stream:" if presentation.streaming else "output:"))
+        lines.append(
+            self._colorize(
+                "  Model " + ("stream:" if presentation.streaming else "output:"), "36"
+            )
+        )
         for line in presentation.model_text.splitlines()[:2] or [
             "no visible text reported"
         ]:

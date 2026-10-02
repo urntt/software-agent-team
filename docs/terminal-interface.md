@@ -5,6 +5,11 @@ On a capable interactive terminal, the control editor remains below the live
 panels. Milestones append above them without replacing the draft. Completion
 choices occupy their own rows below the editor. Short terminals abbreviate the
 status panel and report the omitted rows; enlarging the terminal reveals more.
+One reserved blank row separates scrollback from the live region, including
+Planning totals before an Agent observation. Live headings and elapsed totals
+use cyan, waiting states use yellow, budget uses green, context and results use
+blue, and Git changes and tool headings use magenta. The existing color setting
+also applies to these panels; `--progress-color never` disables their colors.
 
 ## Visibility
 

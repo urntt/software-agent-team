@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
+from io import StringIO
 
 import pytest
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output.base import Size
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from software_agent_team.control_console import ControlCompleter
+from software_agent_team.planning import TerminalPlanningProgress
+from software_agent_team.progress import TerminalProgressRenderer
 from software_agent_team.terminal_dashboard import TerminalDashboard
 
 
@@ -18,6 +24,73 @@ def wait_until(predicate) -> None:
     while not predicate():
         assert time.monotonic() < deadline
         time.sleep(0.01)
+
+
+@pytest.mark.parametrize("phase", ["planning", "execution"])
+@pytest.mark.parametrize("color", [True, False])
+def test_scrollback_boundary_and_colors_preserve_command_draft(phase, color) -> None:
+    """Render both production callbacks through the real terminal application."""
+
+    output = StringIO()
+    renderer = (
+        TerminalPlanningProgress if phase == "planning" else TerminalProgressRenderer
+    )(
+        output=output,
+        color="always" if color else "never",
+        environment={"TERM": "xterm-256color"},
+        is_terminal=True,
+        metrics=lambda: [
+            "Run · 00:01:23 elapsed · $0.0100 settled",
+            "Budget · $0.9900 headroom / $1.00 authorized",
+            "Context · builder: 100 / 1000 tokens",
+            "Git · +12 / -3 lines since build base",
+        ],
+    )
+    terminal = Vt100_Output(
+        output,
+        lambda: Size(rows=18, columns=80),
+        term="xterm-256color",
+        enable_cpr=False,
+    )
+    with create_pipe_input() as pipe:
+        dashboard = TerminalDashboard(
+            submit=lambda _: "accepted",
+            completer=ControlCompleter(planning=True),
+            live_lines=renderer.live_lines,
+            prompt_input=pipe,
+            prompt_output=terminal,
+            color=color,
+        )
+        renderer.attach_dashboard(dashboard)
+        dashboard.start()
+        try:
+            pipe.send_text("/visibility sta")
+            wait_until(lambda: dashboard.buffer.text == "/visibility sta")
+            dashboard.write("A milestone above the live region")
+            wait_until(lambda: "A milestone above the live region" in output.getvalue())
+            wait_until(lambda: dashboard.app.renderer.last_rendered_screen is not None)
+            screen = dashboard.app.renderer.last_rendered_screen
+
+            def row(y):
+                return "".join(screen.data_buffer[y][x].char for x in range(80)).strip()
+
+            assert row(0) == ""
+            assert row(1).startswith("Run ·")
+            assert row(2).startswith("Budget ·")
+            assert dashboard.buffer.text == "/visibility sta"
+            codes = {
+                int(code)
+                for group in re.findall(r"\x1b\[([0-9;]*)m", output.getvalue())
+                for code in group.split(";")
+                if code
+            }
+            assert (36 in codes) is color
+            assert (32 in codes) is color
+            assert (34 in codes) is color
+            assert (35 in codes) is color
+        finally:
+            dashboard.close()
+            renderer.close()
 
 
 def test_completion_and_answers_share_editor_without_early_submission() -> None:
