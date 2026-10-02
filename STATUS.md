@@ -9,16 +9,23 @@ the [history map](docs/history/README.md).
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.6`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.6),
-tagged at `d31e7b428f3bdd5f0c9cb557efa0a3c2acbe2edd`. Its normal
-[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/36879965047)
-succeeded: hosted canonical passed 2,058 tests with four environment skips;
-the clean Linux candidate passed 2,061 with one root-only skip. Official
-bootstrap, manifest, and source-archive identities and digests were verified.
+The latest published stable release is [`v0.6.7`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.7),
+tagged at `c8751996621129bba8dc7d5bd426d1323d4c57f7`. Its normal
+[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/36983650646)
+succeeded: hosted canonical passed 2,070 tests with four environment skips.
+Official bootstrap, manifest, and source-archive identities and digests were
+independently verified. The patch includes legacy provider-state recovery,
+partial uninstall/catalog diagnostics, and validation-fixture lifecycle fixes.
+The earlier Linux implementation gate passed 2,073 tests with one root-only
+skip. This publication does not constitute a new WSL or provider-backed journey.
 
-The 0.6.7 patch candidate includes legacy provider-state recovery, partial
-uninstall/catalog diagnostics, and validation-fixture lifecycle fixes. It is
-being prepared for stable publication; the 0.6.6 tag and assets remain unchanged.
+A fresh ordinary Linux account installed 0.6.7 from the public stable bootstrap.
+Another installed immutable 0.6.6 and upgraded to 0.6.7 through `sat update`.
+Exact identities/runtime paths, state preservation, same-target no-op, channel
+switches, active-run refusal, injected rollback, export, and uninstall passed.
+The test accounts and attributable resources were removed with the prior Docker
+inventory unchanged. These are installation-lifecycle checks, without provider
+generation or the original WSL configuration-repair acceptance.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
