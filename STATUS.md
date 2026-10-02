@@ -9,52 +9,41 @@ the [history map](docs/history/README.md).
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.8`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.8),
-tagged at `84f8e825e5c766f2ae5a097f27578b0df8dab481`. Its normal
-[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/36989698626)
-succeeded. Both candidate and tag canonical gates passed 2,070 tests with four
-environment skips, with the exact source clean. Official bootstrap, manifest,
-and source-archive identities and digests were independently verified.
+The latest published stable release is [`v0.6.9`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.9),
+tagged at `d7384f013d94f2ed3af8bc6e9caca74c370e07aa`. Its normal
+[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/37000165888)
+succeeded. Candidate and tag canonical gates each passed 2,075 tests with ten
+environment skips and clean tracked source. Official latest, bootstrap, manifest,
+and independently fetched public-tag archive identities and digests were verified.
 
-A same-machine WSL report confirmed that 0.6.7 upgraded successfully but still
-refused the historical provider peer during first-run configuration. Read-only
-metadata confirmed that the old SDK directory was gone and the current SDK's
-ownership marker and host were valid. Normal activation retains only the active
-release and its direct predecessor; requiring the retired SDK's marker therefore
-made configuration recovery incompatible with normal cleanup.
+Configuration staging handles two historical SDK compatibility boundaries.
+Retired package peers can be rebound only after current managed-lifecycle and
+ownership validation; unknown or unowned targets remain refused. Legacy shared
+and agent SQLite databases are migrated by the pinned SDK before provider prompts,
+inside a constrained, networkless container with only the staging copy writable.
+Cancellation preserves the original state; committed registry paths remain relative
+and subsequent configuration can read the migrated databases. Unresolved container
+cleanup preserves its exact candidate and container receipts.
 
-The 0.6.8 fix recognizes both historical SDK package layouts and permits rebinding
-a missing sibling only after validating the current active managed lifecycle.
-It never follows or recreates the old target. The regression crosses production
-activation, retirement, staging, cancellation, and configuration commit, with
-negative checks for unrelated, unknown, and unowned targets. Seventy-five focused
-migration and managed-install checks passed.
+Real pinned-SDK/Docker checks on ordinary Linux covered schema-1 shared and agent
+stores, WAL data, authentication-record preservation, cancellation/commit,
+subsequent configuration, and damaged or unsupported targets. The affected suite
+passed 174 checks; the migration suite passed eleven, with four selected checks
+also validating the final repeated-configuration assertion. Docker-image skips in
+CI are supplemented by these real local SDK checks.
 
-An ordinary Linux account installed the exact 0.6.8 candidate and started `sat`
-with a dangling SDK peer matching the reported shape. The real provider-setup
-prompt was reached, SIGINT exited 130, and cancellation preserved the original
-peer and opaque credential fixture. Production staging/commit and actual Node
-loading of the rebound SDK package passed, without changing the current SDK or
-recreating the retired directory. Export, uninstall, and attributable cleanup
-passed with the prior Docker inventory unchanged. A separate ordinary account installed public 0.6.7 and upgraded to 0.6.8 through
-normal `sat update`, with the dangling peer present before upgrade. Exact stable
-identity, state preservation, SDK-peer staging/commit, same-target no-op, export,
-and canonical `sat uninstall` passed; cleanup preserved the prior Docker
-inventory. The unchanged channel/rollback owners reuse 0.6.7 evidence after
-component comparison, rather than claiming the whole matrix was rerun.
-The original same-machine WSL acceptance remains pending. These checks do not
-constitute a provider-backed journey or determine the earlier catalog failure's
-cause.
-
-A newer same-machine WSL 0.6.8 transcript confirms that peer staging now reaches
-the official provider wizard. Credential entry then refuses a historical agent
-database at schema 1; the SDK recommends a global Doctor command that is absent
-from SAT's private installation. The 0.6.9 candidate stages SDK-owned shared and
-agent SQLite migration before provider prompts, in a networkless container with
-only the private copy writable. Real pinned-SDK schema-1 migration, auth-record
-preservation, cancellation/commit, and subsequent local SDK inspection have
-passed on ordinary Linux. Original WSL configuration/startup and uninstall
-acceptance remain pending; no provider request or new complete journey was made.
+Exact candidate and public stable installation assertions passed on an ordinary
+Linux account using an isolated tmpfs profile because the host disk was full.
+The checks covered identity, normal same-version update, actual first-launch
+configuration cancellation, SDK migration/commit, repeated staging, default export,
+and canonical uninstall. Attributable account, mount, process, and temporary-resource
+cleanup preserved the prior Docker inventory. Original operator capacity/output
+assertion failures remain failures; continuations completed the remaining assertions
+in the same installations. This is not ordinary disk-capacity acceptance or a new
+provider-backed journey. Unchanged installation/channel/rollback owners reuse
+0.6.8 evidence after component comparison. Original same-machine WSL configuration,
+model checks, subsequent startup, and uninstall acceptance remain pending; the
+cause of the earlier catalog failure remains unknown.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
