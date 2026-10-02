@@ -491,6 +491,18 @@ configuration, credentials, sessions, or npm entries that escape these boundarie
 are refused with the affected path. Catalog failures retain a bounded, redacted
 runtime diagnostic; a nonzero local catalog exit is not a provider outage.
 
+Before provider prompts, configuration staging checks for historical SQLite
+state. With SAT inactive, it delegates shared-state and agent-schema/media
+migration to the pinned SDK's Doctor migration owners. The migration runs as
+the current user in the verified local sandbox image, with networking disabled,
+the SDK mounted read-only, and only the uncommitted private-state copy writable.
+Caller credentials are not passed to that container. Unknown database registry
+targets and newer schemas are refused; cancellation or failure preserves live
+state. The original configuration and credentials change only after local
+validation and transaction commit. A cleanup failure retains the exact candidate
+and container identity for recovery instead of deleting a mounted tree.
+This does not require an `openclaw` command on the global PATH.
+
 Reconfigure or inspect the secret-free values with:
 
 ```bash

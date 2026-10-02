@@ -69,3 +69,20 @@ def isolated_openclaw_environment(
         }
     )
     return environment
+
+
+def is_owned_openclaw_runtime(root: Path) -> bool:
+    """Recognize only this account's real, exactly marked private SDK root."""
+
+    marker = root / ".sat-owned-runtime"
+    try:
+        if root.is_symlink() or marker.is_symlink():
+            return False
+        if root.stat().st_uid != os.geteuid() or marker.stat().st_uid != os.geteuid():
+            return False
+        return marker.read_text(encoding="utf-8").splitlines() == [
+            "software-agent-team-openclaw-runtime-v1",
+            f"root={root}",
+        ]
+    except (OSError, UnicodeError):
+        return False

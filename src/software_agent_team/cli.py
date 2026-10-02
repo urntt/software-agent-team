@@ -89,7 +89,10 @@ from software_agent_team.model_runtime import (
     runtime_profile_for_model,
     runtime_profile_from_openclaw_configuration,
 )
-from software_agent_team.openclaw_runtime import isolated_openclaw_environment
+from software_agent_team.openclaw_runtime import (
+    is_owned_openclaw_runtime,
+    isolated_openclaw_environment,
+)
 from software_agent_team.paths import user_state_root
 from software_agent_team.planning import (
     AdaptivePlanningCoordinator,
@@ -163,6 +166,11 @@ from software_agent_team.schema_compatibility import (
     SchemaCompatibilityError,
     inspect_candidate_persisted_state,
     inspect_persisted_schema_compatibility,
+)
+from software_agent_team.sdk_state_migration import (
+    StateMigrationCleanupError,
+    migrate_copied_provider_databases,
+    preflight_provider_database_copy,
 )
 from software_agent_team.self_check import (
     TaskModelMetadata,
@@ -2550,6 +2558,7 @@ def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
                     "SAT OpenClaw state contains an unsupported filesystem entry: "
                     f"{display_text(str(entry))}"
                 )
+    preflight_provider_database_copy(state_dir)
     candidate = Path(
         tempfile.mkdtemp(
             prefix=f".{state_dir.name}.candidate-",
@@ -2557,6 +2566,7 @@ def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
         )
     )
     os.chmod(candidate, 0o700)
+    preserve_candidate = False
     try:
         if state_dir.exists():
             shutil.copytree(state_dir, candidate, dirs_exist_ok=True, symlinks=True)
@@ -2573,9 +2583,18 @@ def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
                     if target.is_relative_to(state_dir)
                     else relocated
                 )
+        migrate_copied_provider_databases(
+            candidate,
+            runtime=PROJECT_ROOT / ".sat/openclaw",
+            policy_path=DEFAULT_PRODUCT_POLICY,
+            source_state=state_dir,
+        )
         yield candidate, candidate / "openclaw.json"
+    except StateMigrationCleanupError:
+        preserve_candidate = True
+        raise
     finally:
-        if candidate.exists():
+        if candidate.exists() and not preserve_candidate:
             shutil.rmtree(candidate)
 
 
@@ -2612,9 +2631,9 @@ def _staged_npm_link_target(entry: Path, *, state_dir: Path) -> Path:
             if (
                 old_runtime is not None
                 and _is_openclaw_host_peer(target, runtime=old_runtime)
-                and _owned_openclaw_runtime(current_runtime)
+                and is_owned_openclaw_runtime(current_runtime)
                 and (
-                    _owned_openclaw_runtime(old_runtime)
+                    is_owned_openclaw_runtime(old_runtime)
                     or is_retired_managed_application(
                         current_runtime.parent.parent, old_runtime.parent.parent
                     )
@@ -2639,21 +2658,6 @@ def _is_openclaw_host_peer(target: Path, *, runtime: Path) -> bool:
         and re.fullmatch(r"node-v[0-9]+\.[0-9]+\.[0-9]+", parts[1]) is not None
         and parts[2:] == ("lib", "node_modules", "openclaw")
     )
-
-
-def _owned_openclaw_runtime(root: Path) -> bool:
-    marker = root / ".sat-owned-runtime"
-    try:
-        if root.is_symlink() or marker.is_symlink():
-            return False
-        if root.stat().st_uid != os.geteuid() or marker.stat().st_uid != os.geteuid():
-            return False
-        return marker.read_text(encoding="utf-8").splitlines() == [
-            "software-agent-team-openclaw-runtime-v1",
-            f"root={root}",
-        ]
-    except (OSError, UnicodeError):
-        return False
 
 
 def _replace_exact_private_file(

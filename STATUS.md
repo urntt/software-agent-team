@@ -46,6 +46,16 @@ The original same-machine WSL acceptance remains pending. These checks do not
 constitute a provider-backed journey or determine the earlier catalog failure's
 cause.
 
+A newer same-machine WSL 0.6.8 transcript confirms that peer staging now reaches
+the official provider wizard. Credential entry then refuses a historical agent
+database at schema 1; the SDK recommends a global Doctor command that is absent
+from SAT's private installation. The 0.6.9 candidate stages SDK-owned shared and
+agent SQLite migration before provider prompts, in a networkless container with
+only the private copy writable. Real pinned-SDK schema-1 migration, auth-record
+preservation, cancellation/commit, and subsequent local SDK inspection have
+passed on ordinary Linux. Original WSL configuration/startup and uninstall
+acceptance remain pending; no provider request or new complete journey was made.
+
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
 individual retired journals across repeated activations, including older target

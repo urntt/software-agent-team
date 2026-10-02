@@ -1,0 +1,12 @@
+{
+  "agent": {
+    "producer": "openclaw-agent-db-DKpxi-Ll.js",
+    "producer_sha256": "5c99ab6de1ccc1419ed1bdbc783b79203afc34e564f794df4d91bf10e0b53360",
+    "fixture_sha256": "3bb1bc404009cd34d8d7f3c309a4ec322884bf571583e1555383a14d25e32411"
+  },
+  "state": {
+    "producer": "openclaw-state-db-DzSsA9Ji.js",
+    "producer_sha256": "ba920b2e6f63293a27c34615fc31dcb16a20a68a1e1e34fbccdcac56a9608149",
+    "fixture_sha256": "c505bfe68b2dda638f935f92df3b2232a73021a9d7c8e5e4c49922e702fd315a"
+  }
+}

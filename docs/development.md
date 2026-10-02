@@ -181,6 +181,15 @@ scenario state remain untouched. PTY cancellation fixtures also persist process
 leases and recover and reap the isolated executor child when their controller
 is forcibly stopped during test teardown.
 
+`tests/test_sdk_state_migration.py` uses schema-only inputs from OpenClaw
+2026.7.1-2 and the current pinned SDK's real SQLite/Doctor API in the immutable
+local sandbox. It verifies legacy shared/agent stores, stopped-writer WAL,
+cancellation, activation, subsequent SDK inspection, owner/schema refusal,
+external registry boundaries, and exact failed-container cleanup. It makes no
+provider request. Run this affected set on a prepared runtime/image; an
+unprepared checkout skips the live prerequisites rather than fabricating SDK
+migration success.
+
 For the pinned SQLite compression boundary, select only
 `--scenario submission-contract --prompt-padding-chars 100000` and inspect
 the retained session store for an `event_zstd` row. This drives the actual

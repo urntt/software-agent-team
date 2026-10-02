@@ -248,7 +248,7 @@ def _sandbox_image(policy_path: Path) -> str:
         or not image.strip()
     ):
         raise WorkspaceMountError(
-            "sandbox policy is unsafe for legacy workspace repair"
+            "sandbox policy is unsafe for legacy private-state maintenance"
         )
     return image
 
@@ -271,7 +271,7 @@ def repair_legacy_sandbox_skill_mountpoints(
     if not candidates:
         return ()
 
-    image_id = _verified_repair_image(
+    image_id = verified_local_sandbox_image(
         policy_path, sandbox_binary, runner, timeout_seconds
     )
     repaired: list[LegacyWorkspaceMountRepair] = []
@@ -311,13 +311,13 @@ def repair_legacy_sandbox_skill_mountpoints(
     return tuple(repaired)
 
 
-def _verified_repair_image(
+def verified_local_sandbox_image(
     policy_path: Path,
     sandbox_binary: str,
     runner: ProcessRunner,
     timeout_seconds: int,
 ) -> str:
-    """Resolve the same recorded engine and immutable image for both repairs."""
+    """Resolve the recorded engine and immutable image for private-state maintenance."""
 
     record_path = os.environ.get("SAT_INSTALL_METADATA_PATH")
     if record_path:
@@ -331,7 +331,8 @@ def _verified_repair_image(
             verify_docker_engine(engine)
         except (DockerEngineError, OSError, ValueError) as error:
             raise WorkspaceMountError(
-                "the recorded Docker engine is unavailable for workspace repair"
+                "the recorded Docker engine is unavailable for "
+                "private-state maintenance"
             ) from error
 
     image = _sandbox_image(policy_path)
@@ -344,7 +345,7 @@ def _verified_repair_image(
     if inspected.returncode != 0 or _IMAGE_ID.fullmatch(image_id) is None:
         raise WorkspaceMountError(
             "the configured local sandbox image is unavailable for legacy "
-            "workspace repair"
+            "private-state maintenance"
         )
 
     return image_id
@@ -482,45 +483,8 @@ def repair_legacy_openclaw_skill_workspaces(
     if "," in str(cache) or any(ord(c) < 32 for c in str(cache)):
         raise WorkspaceMountError("SDK cache path is unsafe for a Docker bind mount")
 
-    # Reuse the state lifecycle's complete ownership and run/process checks. This
-    # helper may also run before configuration staging, outside uninstall's lock.
-    from software_agent_team.sandbox_lifecycle import (
-        SandboxCleanupError,
-        inspect_sat_sandbox_resources,
-    )
-    from software_agent_team.uninstall_state import (
-        UninstallPolicy,
-        UninstallStateError,
-        UninstallStateRequest,
-        preflight_uninstall_state,
-    )
-    from software_agent_team.user_configuration import user_configuration_path
-
-    try:
-        preflight_uninstall_state(
-            UninstallStateRequest(
-                state_root=openclaw_state.parent,
-                config_path=user_configuration_path(),
-                config_policy=UninstallPolicy.KEEP,
-                data_policy=UninstallPolicy.KEEP,
-                provider_policy=UninstallPolicy.KEEP,
-            )
-        )
-        resources = inspect_sat_sandbox_resources(
-            sandbox_binary=sandbox_binary,
-            state_root=openclaw_state.parent,
-            runner=runner,
-            timeout_seconds=timeout_seconds,
-        )
-    except (UninstallStateError, SandboxCleanupError) as error:
-        raise WorkspaceMountError(
-            f"SDK skill ownership repair preflight failed: {error}"
-        ) from error
-    if resources.running:
-        raise WorkspaceMountError(
-            "stop SAT's active sandboxes before SDK skill ownership repair"
-        )
-    image_id = _verified_repair_image(
+    require_idle_openclaw_state(openclaw_state, sandbox_binary, runner, timeout_seconds)
+    image_id = verified_local_sandbox_image(
         policy_path, sandbox_binary, runner, timeout_seconds
     )
 
@@ -611,3 +575,49 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def require_idle_openclaw_state(
+    openclaw_state: Path,
+    sandbox_binary: str,
+    runner: ProcessRunner,
+    timeout_seconds: int,
+) -> None:
+    """Reuse product ownership, run/process leases, and sandbox liveness."""
+
+    from software_agent_team.sandbox_lifecycle import (
+        SandboxCleanupError,
+        inspect_sat_sandbox_resources,
+    )
+    from software_agent_team.uninstall_state import (
+        UninstallPolicy,
+        UninstallStateError,
+        UninstallStateRequest,
+        preflight_uninstall_state,
+    )
+    from software_agent_team.user_configuration import user_configuration_path
+
+    try:
+        preflight_uninstall_state(
+            UninstallStateRequest(
+                state_root=openclaw_state.parent,
+                config_path=user_configuration_path(),
+                config_policy=UninstallPolicy.KEEP,
+                data_policy=UninstallPolicy.KEEP,
+                provider_policy=UninstallPolicy.KEEP,
+            )
+        )
+        resources = inspect_sat_sandbox_resources(
+            sandbox_binary=sandbox_binary,
+            state_root=openclaw_state.parent,
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+        )
+    except (UninstallStateError, SandboxCleanupError) as error:
+        raise WorkspaceMountError(
+            f"SAT provider-state maintenance preflight failed: {error}"
+        ) from error
+    if resources.running:
+        raise WorkspaceMountError(
+            "stop SAT's active sandboxes before private-state maintenance"
+        )

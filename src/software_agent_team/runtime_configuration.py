@@ -22,6 +22,7 @@ from software_agent_team.configuration import load_openclaw_template
 from software_agent_team.docker_engine import (
     DockerEngineError,
     DockerEngineIdentity,
+    container_user,
     current_docker_engine,
     discover_docker_engine,
     engine_environment,
@@ -1007,11 +1008,7 @@ def probe_sandbox_runtime(
                 "the configured Docker engine is not the verified rootless daemon"
             )
         engine = discovered
-    sandbox_user = (
-        "0:0"
-        if engine is not None and engine.rootless
-        else (f"{os.getuid()}:{os.getgid()}")
-    )
+    sandbox_user = container_user(engine)
     if engine is not None:
         verify_docker_engine(engine)
         environment = engine_environment(engine, selected_environment)

@@ -68,6 +68,16 @@ class DockerEngineIdentity(BaseModel):
         return value
 
 
+def container_user(identity: DockerEngineIdentity | None) -> str:
+    """Map the invoking account through the selected engine's user namespace."""
+
+    return (
+        "0:0"
+        if identity is not None and identity.rootless
+        else f"{os.getuid()}:{os.getgid()}"
+    )
+
+
 _BOUND_ENGINE: ContextVar[DockerEngineIdentity | None] = ContextVar(
     "sat_bound_docker_engine", default=None
 )

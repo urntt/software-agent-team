@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.7",
-  "target_version": "0.6.8",
+  "baseline_version": "0.6.8",
+  "target_version": "0.6.9",
   "changes": [
     {
-      "id": "retired-sdk-provider-peer-recovery",
+      "id": "private-sdk-database-migration",
       "impact": "patch",
-      "summary": "Rebind recognized npm SDK host peers after their managed application is retired, using active lifecycle ownership and preserving credentials and external targets"
+      "summary": "Migrate historical provider SQLite state with the pinned SDK inside the reversible configuration transaction, preserving live credentials and bounding filesystem, network, and container cleanup authority"
     }
   ]
 }

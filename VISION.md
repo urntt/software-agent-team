@@ -228,6 +228,7 @@ Each concept has one authoritative owner.
 | Sanitized Agent runtime boundary | `configs/openclaw.example.json5` |
 | SAT-owned OpenClaw process-environment isolation | `src/software_agent_team/openclaw_runtime.py` and `scripts/openclaw-environment.sh` |
 | Frozen secret-free provider/model transport profile and reviewed presets | `src/software_agent_team/model_runtime.py` |
+| Transactional compatibility of private provider databases | `src/software_agent_team/sdk_state_migration.py`; schema/media transformations remain owned by the pinned SDK |
 | Run-scoped runtime materialization and preflight | `src/software_agent_team/runtime_configuration.py` |
 | Run lifecycle state and persistence | `src/software_agent_team/run_control.py` |
 | Fixed-fixture compatibility orchestration and decisions | `src/software_agent_team/workflow.py` |
