@@ -1,6 +1,6 @@
 # Project Status
 
-**Last reviewed:** October 1, 2026 (Pacific Time)
+**Last reviewed:** October 2, 2026 (Pacific Time)
 
 This page records current implementation and validation facts. Product direction
 belongs to [`VISION.md`](VISION.md); contracts and operating instructions live
@@ -15,6 +15,10 @@ tagged at `d31e7b428f3bdd5f0c9cb557efa0a3c2acbe2edd`. Its normal
 succeeded: hosted canonical passed 2,058 tests with four environment skips;
 the clean Linux candidate passed 2,061 with one root-only skip. Official
 bootstrap, manifest, and source-archive identities and digests were verified.
+
+The 0.6.7 patch candidate includes legacy provider-state recovery, partial
+uninstall/catalog diagnostics, and validation-fixture lifecycle fixes. It is
+being prepared for stable publication; the 0.6.6 tag and assets remain unchanged.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
