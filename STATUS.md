@@ -9,11 +9,11 @@ the [history map](docs/history/README.md).
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.10`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.10),
-tagged at `5ea0ba33317477efac18da2f7fde53703c040511`. Its normal
-[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/37009621253)
-and main CI succeeded. The native candidate canonical gate passed 2,097 tests
-with one cross-UID fixture skip; the tag gate passed 2,088 with ten environment
+The latest published stable release is [`v0.6.11`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.11),
+tagged at `39d87fa64e81815cd2838fa648c1ae7e7571032e`. Its normal
+[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/37027236748)
+and main CI succeeded. The native candidate canonical gate passed 2,101 tests
+with one cross-UID fixture skip; the tag gate passed 2,092 with ten environment
 skips. Both recorded clean tracked source at the exact release revision.
 Official latest, bootstrap, manifest, and independently fetched public-tag
 archive identities and digests were verified.
@@ -44,9 +44,12 @@ assertion failures remain failures; continuations completed the remaining assert
 in the same installations. This is not ordinary disk-capacity acceptance or a new
 provider-backed journey. Unchanged installation/channel/rollback owners reuse
 0.6.8 evidence after component comparison. Same-machine WSL update, configuration, a user-approved minimal provider check,
-and subsequent startup passed. Planning then stopped at local model preflight;
-export and uninstall acceptance remain pending. The earlier catalog failure
-cause remains unknown.
+and subsequent startup passed. After ordinary 0.6.10 update, the same WSL
+configuration also passed isolated Planning preflight and received model replies.
+The final proposal was rejected before approval for unordered overlapping writer
+scopes. The console does not contain each proposal and correction diagnostic,
+so the exact reason for nonconvergence remains unknown. Export and uninstall
+acceptance remain pending. The earlier catalog failure cause remains unknown.
 
 The 0.6.10 release addresses deferred SDK catalog auth availability. A real
 Agent-local SDK credential can be usable while the catalog returns
@@ -56,9 +59,19 @@ same deadline. Credentials remain with their SDK owner; no live probe is made
 and status output is excluded from diagnostics. Real pinned-SDK Clarification,
 Planning, approved execution, and missing-auth checks passed, along with the
 bounded-deadline, invalid-status, and exact-route failure checks. The same-machine
-WSL Planning preflight still needs confirmation after ordinary stable update;
-native fixtures do not replace that device evidence. No new provider-backed
-journey or paid model request was made for this patch.
+WSL Planning preflight passed after ordinary stable update; native fixtures alone
+did not replace that device evidence. No new provider-backed journey or paid
+model request was made for this patch.
+
+The live terminal layout now reserves one blank row above the panels, including
+Planning totals before an Agent observation. Planning and execution share a
+metric palette, waiting states are yellow, and tool/result/model headings are
+colored. Existing color preferences and noninteractive fallbacks remain in force.
+Four production-renderer tests cover both phases and color/never modes after a
+scrollback milestone, including the single-row boundary and preserved command
+draft. The affected checks passed 83 tests before the canonical gates above.
+Current-version WSL appearance, narrow-terminal, and resize observations remain
+device-specific acceptance gaps.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
