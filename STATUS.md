@@ -59,7 +59,7 @@ were cleaned while the prior Docker baseline was preserved.
   marked SDK, retains internal links across activation, and repairs only known
   empty root-owned SDK skill directories through the constrained Docker owner.
   Partial uninstall errors retain completed exports/cleanup and safe OS details.
-  The implementation passed 169 focused checks and a clean Linux canonical gate
+  The implementation passed 169 focused checks and a Linux canonical gate
   (2,073 passed, one root-only skip). Actual UID 1000/Docker reproduction covered
   the permission failure, recovery, staging, and explicit state purge with the
   existing container inventory unchanged. This is not WSL, provider onboarding,
