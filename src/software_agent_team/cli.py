@@ -64,6 +64,7 @@ from software_agent_team.managed_install import (
     ManagedInstallPaths,
     finalize_staged_sandbox_image_transition,
     install_managed_target,
+    is_retired_managed_application,
     managed_foreground_task_lease,
     prepare_staged_sandbox_image_transition,
     promote_legacy_docker_engine_record,
@@ -2583,7 +2584,8 @@ def _staged_npm_link_target(entry: Path, *, state_dir: Path) -> Path:
 
     Copying links never copies their external targets. Authoritative config,
     credentials and sessions still reject links. A legacy SDK peer is accepted
-    only inside npm node_modules and only from a marked SAT runtime.
+    only inside npm node_modules, from a marked SAT runtime or a retired sibling
+    of the active managed application. The old target is never followed.
     """
 
     relative = entry.relative_to(state_dir)
@@ -2609,8 +2611,14 @@ def _staged_npm_link_target(entry: Path, *, state_dir: Path) -> Path:
             current_runtime = DEFAULT_OPENCLAW_BINARY.parent.parent
             if (
                 old_runtime is not None
-                and _owned_openclaw_runtime(old_runtime)
+                and _is_openclaw_host_peer(target, runtime=old_runtime)
                 and _owned_openclaw_runtime(current_runtime)
+                and (
+                    _owned_openclaw_runtime(old_runtime)
+                    or is_retired_managed_application(
+                        current_runtime.parent.parent, old_runtime.parent.parent
+                    )
+                )
             ):
                 host = current_runtime / "runtime/node_modules/openclaw"
                 if host.is_dir() and not host.is_symlink() and host.resolve() == host:
@@ -2618,7 +2626,18 @@ def _staged_npm_link_target(entry: Path, *, state_dir: Path) -> Path:
     raise RuntimeConfigurationError(
         "unsupported symbolic link in SAT OpenClaw state: "
         f"{display_text(str(entry))}. Configuration and credentials were not changed. "
-        "Restore that exact entry as a real file or directory before retrying setup."
+        "Only npm-internal links and recognized SAT SDK host peers can be staged. "
+        "Preserve this state and report the affected path before retrying setup."
+    )
+
+
+def _is_openclaw_host_peer(target: Path, *, runtime: Path) -> bool:
+    parts = target.relative_to(runtime).parts
+    return parts == ("runtime", "node_modules", "openclaw") or (
+        len(parts) == 5
+        and parts[0] == "tools"
+        and re.fullmatch(r"node-v[0-9]+\.[0-9]+\.[0-9]+", parts[1]) is not None
+        and parts[2:] == ("lib", "node_modules", "openclaw")
     )
 
 

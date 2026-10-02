@@ -27,6 +27,19 @@ The test accounts and attributable resources were removed with the prior Docker
 inventory unchanged. These are installation-lifecycle checks, without provider
 generation or the original WSL configuration-repair acceptance.
 
+A subsequent same-machine WSL report confirmed that 0.6.7 upgraded successfully
+but still refused the historical provider peer during first-run configuration.
+Read-only metadata confirmed that its old SDK directory was gone and the current
+SDK's ownership marker and host were valid. Normal activation retains only the
+active release and its direct predecessor; requiring the retired SDK's marker
+therefore made configuration recovery incompatible with normal cleanup.
+The 0.6.8 candidate recognizes both historical SDK package layouts and permits
+rebinding a missing sibling only after validating the current active managed
+lifecycle. It never follows or recreates the old target. The regression crosses
+production activation, retirement, staging, cancellation, and configuration
+commit, and retains negative checks for unrelated, unknown, and unowned targets.
+Publication and the original WSL repair acceptance remain pending.
+
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
 individual retired journals across repeated activations, including older target

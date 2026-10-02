@@ -544,7 +544,12 @@ def test_initial_install_stages_verifies_and_activates_one_logical_link(
 
 def test_consecutive_upgrades_retain_only_active_and_direct_predecessor(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from software_agent_team import cli
+    from software_agent_team.runtime_configuration import RuntimeConfigurationError
+    from software_agent_team.user_configuration import UserConfiguration
+
     repository, first_revision = prepare_repository(tmp_path)
     install_paths = paths(tmp_path)
     install_managed_target(dev_target(repository, first_revision), install_paths)
@@ -571,6 +576,85 @@ def test_consecutive_upgrades_retain_only_active_and_direct_predecessor(
         second_release,
         third_release,
     }
+
+    # The SDK's persistent plugin cache outlives the retired application.
+    sdk = third_release / ".sat/openclaw"
+    host = sdk / "runtime/node_modules/openclaw"
+    host.mkdir(parents=True)
+    (sdk / ".sat-owned-runtime").write_text(
+        f"software-agent-team-openclaw-runtime-v1\nroot={sdk}\n"
+    )
+    sentinel = host / "sentinel"
+    sentinel.write_bytes(b"current SDK must not be copied or edited")
+    state = install_paths.state_root / "openclaw"
+    peer = state / (
+        "npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/"
+        "@openclaw/deepseek-provider/node_modules/openclaw"
+    )
+    peer.parent.mkdir(parents=True)
+    target = first_release / (
+        ".sat/openclaw/tools/node-v24.19.0/lib/node_modules/openclaw"
+    )
+    peer.symlink_to(target)
+    credential = state / "credentials/auth.json"
+    credential.parent.mkdir()
+    credential.write_bytes(b"opaque preserved credential")
+    monkeypatch.setattr(cli, "DEFAULT_OPENCLAW_BINARY", sdk / "bin/openclaw")
+    for refused_target in (
+        tmp_path / "unrelated/.sat/openclaw/runtime/node_modules/openclaw",
+        first_release / ".sat/openclaw/credentials/node_modules/openclaw",
+        second_release / ".sat/openclaw/runtime/node_modules/openclaw",
+        first_release / ".sat/openclaw/tools/not-node/lib/node_modules/openclaw",
+    ):
+        peer.unlink()
+        peer.symlink_to(refused_target)
+        with (
+            pytest.raises(RuntimeConfigurationError, match="unsupported symbolic link"),
+            cli._staged_openclaw_state(state),
+        ):
+            pytest.fail("unowned or unknown SDK target must be refused")
+        assert os.readlink(peer) == str(refused_target)
+        assert credential.read_bytes() == b"opaque preserved credential"
+        assert not tuple(state.parent.glob(".openclaw.candidate-*"))
+    peer.unlink()
+    peer.symlink_to(target)
+    root_marker = install_paths.managed_root / MANAGED_ROOT_MARKER_NAME
+    root_marker_bytes = root_marker.read_bytes()
+    try:
+        root_marker.write_text("{}")
+        with (
+            pytest.raises(RuntimeConfigurationError, match="unsupported symbolic link"),
+            cli._staged_openclaw_state(state),
+        ):
+            pytest.fail(
+                "a missing SDK cannot be trusted without active lifecycle ownership"
+            )
+    finally:
+        root_marker.write_bytes(root_marker_bytes)
+    # The current locked npm layout also survives retirement. Cancelling staging
+    # must retain the original peer until the configuration transaction commits.
+    peer.unlink()
+    modern_target = first_release / ".sat/openclaw/runtime/node_modules/openclaw"
+    peer.symlink_to(modern_target)
+    with cli._staged_openclaw_state(state) as (candidate, _):
+        assert (candidate / peer.relative_to(state)).resolve() == host
+    assert os.readlink(peer) == str(modern_target)
+    peer.unlink()
+    peer.symlink_to(target)
+    with cli._staged_openclaw_state(state) as (candidate, _):
+        assert os.readlink(peer) == str(target)
+        assert not target.exists()
+        assert (candidate / peer.relative_to(state)).resolve() == host
+        cli._commit_configuration_transaction(
+            UserConfiguration(model="provider/model"),
+            user_path=install_paths.state_root / "config.json",
+            live_openclaw_state=state,
+            staged_openclaw_state=candidate,
+        )
+    assert peer.resolve() == host
+    assert credential.read_bytes() == b"opaque preserved credential"
+    assert sentinel.read_bytes() == b"current SDK must not be copied or edited"
+    assert not first_release.exists()
 
     activate_staged_application(
         stage_managed_target(

@@ -2079,6 +2079,42 @@ def _active_managed_lifecycle(
     return managed_root, root_marker, release_marker
 
 
+def is_retired_managed_application(
+    project_root: Path,
+    retired_root: Path,
+) -> bool:
+    """Recognize a missing sibling in the active installation's version storage.
+
+    The retired location conveys no authority to read or recreate its contents.
+    Only the current active lifecycle establishes ownership; a missing historic
+    marker cannot establish it. This permits rebinding derived SDK cache peers
+    after normal release retirement without following the missing target.
+    """
+
+    try:
+        lifecycle = _active_managed_lifecycle(project_root)
+        if lifecycle is None:
+            return False
+        managed_root, marker, _ = lifecycle
+        versions = Path(marker.versions_root)
+        if retired_root.parent != versions:
+            return False
+        for path in (
+            managed_root,
+            versions,
+            project_root,
+            managed_root / MANAGED_ROOT_MARKER_NAME,
+            project_root / MANAGED_MARKER_NAME,
+        ):
+            if path.is_symlink() or path.stat().st_uid != os.geteuid():
+                return False
+        if versions.resolve(strict=True) != versions:
+            return False
+        return not retired_root.exists() and not retired_root.is_symlink()
+    except (OSError, ManagedInstallError):
+        return False
+
+
 def _managed_root_for_release(
     release_marker: ManagedApplicationMarker,
 ) -> tuple[Path, ManagedRootMarker]:

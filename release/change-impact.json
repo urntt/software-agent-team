@@ -1,22 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.6",
-  "target_version": "0.6.7",
+  "baseline_version": "0.6.7",
+  "target_version": "0.6.8",
   "changes": [
     {
-      "id": "legacy-provider-state-recovery",
+      "id": "retired-sdk-provider-peer-recovery",
       "impact": "patch",
-      "summary": "Preserve legitimate staged npm links, bind legacy SDK peers to the current marked runtime, and safely recover known empty root-owned SDK skill directories"
-    },
-    {
-      "id": "partial-uninstall-and-catalog-diagnostics",
-      "impact": "patch",
-      "summary": "Retain completed export and cleanup steps after uninstall failures and provide bounded redacted filesystem and local model catalog diagnostics"
-    },
-    {
-      "id": "validation-fixture-lifecycle",
-      "impact": "patch",
-      "summary": "Reclaim attributable historical workspace caches and terminate aborted planning validation fixtures without altering provider or unrelated resource ownership"
+      "summary": "Rebind recognized npm SDK host peers after their managed application is retired, using active lifecycle ownership and preserving credentials and external targets"
     }
   ]
 }

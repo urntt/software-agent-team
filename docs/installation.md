@@ -479,7 +479,13 @@ digest.
 
 Configuration staging preserves npm-managed internal links without following
 their targets. A plugin's `node_modules/openclaw` peer may refer to a previous
-marked SAT runtime; the staged copy binds that peer to the current private SDK.
+marked SAT runtime, including the former global Node installation layout. When
+normal upgrades have retired that application, SAT verifies the current active
+managed lifecycle and requires the missing release to be a direct sibling in
+that same version storage. Only a recognized SDK package path qualifies; the
+staged copy binds the peer to the current marked private SDK without following
+or recreating the retired target. An unowned or unrelated missing target fails
+closed.
 Internal links become relative so they remain valid after activation. Links in
 configuration, credentials, sessions, or npm entries that escape these boundaries
 are refused with the affected path. Catalog failures retain a bounded, redacted
