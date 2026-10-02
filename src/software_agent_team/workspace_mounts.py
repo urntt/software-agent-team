@@ -271,6 +271,54 @@ def repair_legacy_sandbox_skill_mountpoints(
     if not candidates:
         return ()
 
+    image_id = _verified_repair_image(
+        policy_path, sandbox_binary, runner, timeout_seconds
+    )
+    repaired: list[LegacyWorkspaceMountRepair] = []
+    for candidate in candidates:
+        container_paths = tuple(
+            _CONTAINER_WORKSPACE / path.relative_to(candidate.workspace)
+            for path in candidate.paths
+        )
+        completed = _run_command(
+            _repair_command(
+                sandbox_binary,
+                image_id,
+                candidate.workspace,
+                entrypoint="/usr/bin/rmdir",
+                capability="DAC_OVERRIDE",
+                arguments=("--", *(str(path) for path in container_paths)),
+            ),
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+        )
+        if completed.returncode != 0:
+            raise WorkspaceMountError(
+                "the constrained sandbox could not remove an empty legacy mountpoint "
+                f"from {candidate.workspace}"
+            )
+        if any(os.path.lexists(path) for path in candidate.paths):
+            raise WorkspaceMountError(
+                "legacy workspace repair returned success without removing its "
+                "exact targets"
+            )
+        repaired.append(
+            LegacyWorkspaceMountRepair(
+                workspace=candidate.workspace,
+                removed_paths=candidate.paths,
+            )
+        )
+    return tuple(repaired)
+
+
+def _verified_repair_image(
+    policy_path: Path,
+    sandbox_binary: str,
+    runner: ProcessRunner,
+    timeout_seconds: int,
+) -> str:
+    """Resolve the same recorded engine and immutable image for both repairs."""
+
     record_path = os.environ.get("SAT_INSTALL_METADATA_PATH")
     if record_path:
         try:
@@ -299,66 +347,228 @@ def repair_legacy_sandbox_skill_mountpoints(
             "workspace repair"
         )
 
-    repaired: list[LegacyWorkspaceMountRepair] = []
-    for candidate in candidates:
-        container_paths = tuple(
-            _CONTAINER_WORKSPACE / path.relative_to(candidate.workspace)
-            for path in candidate.paths
+    return image_id
+
+
+def _repair_command(
+    sandbox_binary: str,
+    image_id: str,
+    mount: Path,
+    *,
+    entrypoint: str,
+    capability: str,
+    arguments: Sequence[str],
+) -> list[str]:
+    """Use a fixed executable in a networkless container over one exact tree."""
+
+    command = [
+        sandbox_binary,
+        "run",
+        "--rm",
+        "--pull",
+        "never",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        capability,
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        "0:0",
+        "--memory",
+        "64m",
+        "--cpus",
+        "0.25",
+        "--pids-limit",
+        "32",
+        "--label",
+        "software-agent-team.cleanup=legacy-workspace-mount-v1",
+        "--mount",
+        f"type=bind,source={mount},target={_CONTAINER_WORKSPACE}",
+        "--entrypoint",
+        entrypoint,
+        image_id,
+        *arguments,
+    ]
+    if entrypoint == "/usr/bin/chown":
+        index = command.index("--security-opt")
+        command[index:index] = ["--cap-add", "DAC_OVERRIDE"]
+    return command
+
+
+def repair_legacy_openclaw_skill_workspaces(
+    *,
+    openclaw_state: Path,
+    policy_path: Path,
+    sandbox_binary: str = "docker",
+    timeout_seconds: int = 30,
+    runner: ProcessRunner = subprocess.run,
+) -> tuple[Path, ...]:
+    """Restore ownership of exact empty SDK skill directories, never credentials.
+
+    Older Docker bind setup could create the SDK skills cache as root. The
+    current SDK skips missing skill sources. Existing empty historical targets
+    still need narrowly bounded compatibility repair before setup or purge.
+    """
+
+    if not openclaw_state.is_absolute() or openclaw_state.resolve() != openclaw_state:
+        raise WorkspaceMountError("OpenClaw state must be a canonical real path")
+    if not os.path.lexists(openclaw_state):
+        return ()
+    owner = os.geteuid()
+    metadata = _lstat_directory(openclaw_state, label="OpenClaw state")
+    if metadata.st_uid != owner:
+        raise WorkspaceMountError("OpenClaw state must belong to the invoking user")
+    cache = openclaw_state / "sandbox"
+    if not os.path.lexists(cache):
+        return ()
+    cache_metadata = _lstat_directory(cache, label="SDK sandbox cache")
+    # Ordinary SDK caches may contain materialized skills and registry files.
+    # Only foreign directory ownership requires the narrow legacy-shape repair.
+    if cache_metadata.st_uid == owner and not any(
+        stat.S_ISDIR(item.st_mode) and item.st_uid != owner
+        for item in (path.lstat() for path in cache.rglob("*"))
+    ):
+        return ()
+    skills = cache / "skills-workspaces"
+    if not os.path.lexists(skills):
+        return ()
+    paths = [cache, skills]
+    for entry in sorted(_directory_entries(cache)):
+        if entry == "skills-workspaces":
+            continue
+        item = (cache / entry).lstat()
+        if not stat.S_ISREG(item.st_mode) or item.st_uid not in {0, owner}:
+            raise WorkspaceMountError(
+                f"unexpected SDK sandbox cache entry: {cache / entry}"
+            )
+    _lstat_directory(skills, label="SDK skills cache")
+    for name in sorted(_directory_entries(skills)):
+        if re.fullmatch(r"agent-[a-z0-9_.-]+-[a-f0-9]{8}", name) is None:
+            raise WorkspaceMountError(
+                f"unrecognized SDK skills workspace: {skills / name}"
+            )
+        workspace = skills / name
+        chain = [
+            workspace,
+            *(workspace.joinpath(*_SANDBOX_SKILL_PARTS[: i + 1]) for i in range(3)),
+        ]
+        for index, path in enumerate(chain):
+            _lstat_directory(path, label="legacy SDK skill directory")
+            expected = (
+                frozenset({_SANDBOX_SKILL_PARTS[index]}) if index < 3 else frozenset()
+            )
+            if _directory_entries(path) != expected:
+                raise WorkspaceMountError(
+                    f"refusing non-empty or unexpected SDK skill directory: {path}"
+                )
+        paths.extend(chain)
+    metadata_by_path = {
+        path: _lstat_directory(path, label="legacy SDK skill directory")
+        for path in paths
+    }
+    foreign = tuple(
+        path for path, item in metadata_by_path.items() if item.st_uid != owner
+    )
+    if not foreign:
+        return ()
+    if any(item.st_uid not in {0, owner} for item in metadata_by_path.values()):
+        raise WorkspaceMountError(
+            "legacy SDK skills cache has an unknown directory owner"
         )
-        completed = _run_command(
-            [
-                sandbox_binary,
-                "run",
-                "--rm",
-                "--pull",
-                "never",
-                "--network",
-                "none",
-                "--read-only",
-                "--cap-drop",
-                "ALL",
-                "--cap-add",
-                "DAC_OVERRIDE",
-                "--security-opt",
-                "no-new-privileges",
-                "--user",
-                "0:0",
-                "--memory",
-                "64m",
-                "--cpus",
-                "0.25",
-                "--pids-limit",
-                "32",
-                "--label",
-                "software-agent-team.cleanup=legacy-workspace-mount-v1",
-                "--mount",
-                f"type=bind,source={candidate.workspace},target={_CONTAINER_WORKSPACE}",
-                "--entrypoint",
-                "/usr/bin/rmdir",
-                image_id,
-                "--",
-                *(str(path) for path in container_paths),
-            ],
+    if "," in str(cache) or any(ord(c) < 32 for c in str(cache)):
+        raise WorkspaceMountError("SDK cache path is unsafe for a Docker bind mount")
+
+    # Reuse the state lifecycle's complete ownership and run/process checks. This
+    # helper may also run before configuration staging, outside uninstall's lock.
+    from software_agent_team.sandbox_lifecycle import (
+        SandboxCleanupError,
+        inspect_sat_sandbox_resources,
+    )
+    from software_agent_team.uninstall_state import (
+        UninstallPolicy,
+        UninstallStateError,
+        UninstallStateRequest,
+        preflight_uninstall_state,
+    )
+    from software_agent_team.user_configuration import user_configuration_path
+
+    try:
+        preflight_uninstall_state(
+            UninstallStateRequest(
+                state_root=openclaw_state.parent,
+                config_path=user_configuration_path(),
+                config_policy=UninstallPolicy.KEEP,
+                data_policy=UninstallPolicy.KEEP,
+                provider_policy=UninstallPolicy.KEEP,
+            )
+        )
+        resources = inspect_sat_sandbox_resources(
+            sandbox_binary=sandbox_binary,
+            state_root=openclaw_state.parent,
             runner=runner,
             timeout_seconds=timeout_seconds,
         )
-        if completed.returncode != 0:
-            raise WorkspaceMountError(
-                "the constrained sandbox could not remove an empty legacy mountpoint "
-                f"from {candidate.workspace}"
-            )
-        if any(os.path.lexists(path) for path in candidate.paths):
-            raise WorkspaceMountError(
-                "legacy workspace repair returned success without removing its "
-                "exact targets"
-            )
-        repaired.append(
-            LegacyWorkspaceMountRepair(
-                workspace=candidate.workspace,
-                removed_paths=candidate.paths,
-            )
+    except (UninstallStateError, SandboxCleanupError) as error:
+        raise WorkspaceMountError(
+            f"SDK skill ownership repair preflight failed: {error}"
+        ) from error
+    if resources.running:
+        raise WorkspaceMountError(
+            "stop SAT's active sandboxes before SDK skill ownership repair"
         )
-    return tuple(repaired)
+    image_id = _verified_repair_image(
+        policy_path, sandbox_binary, runner, timeout_seconds
+    )
+
+    # Reinspect every exact inode/owner and the empty leaves before giving the
+    # constrained helper authority. No recursive chown or provider-root mount.
+    def identity(item: os.stat_result) -> tuple[int, ...]:
+        return (
+            item.st_dev,
+            item.st_ino,
+            item.st_uid,
+            item.st_gid,
+            item.st_mode,
+            item.st_mtime_ns,
+        )
+
+    if identity(cache.lstat()) != identity(cache_metadata) or any(
+        identity(path.lstat()) != identity(item)
+        for path, item in metadata_by_path.items()
+    ):
+        raise WorkspaceMountError("SDK skill directory identity changed during repair")
+    container_paths = tuple(
+        str(_CONTAINER_WORKSPACE / path.relative_to(cache)) for path in foreign
+    )
+    result = _run_command(
+        _repair_command(
+            sandbox_binary,
+            image_id,
+            cache,
+            entrypoint="/usr/bin/chown",
+            capability="CHOWN",
+            arguments=(
+                "--no-dereference",
+                f"{owner}:{os.getegid()}",
+                "--",
+                *container_paths,
+            ),
+        ),
+        runner=runner,
+        timeout_seconds=timeout_seconds,
+    )
+    if result.returncode != 0 or any(
+        _lstat_directory(path, label="repaired SDK skill directory").st_uid != owner
+        for path in paths
+    ):
+        raise WorkspaceMountError(
+            f"constrained SDK skill ownership repair did not complete: {cache}"
+        )
+    return foreign
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -366,6 +576,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspaces-root", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--sandbox-binary", default="docker")
+    parser.add_argument("--openclaw-state", type=Path)
     return parser
 
 
@@ -379,6 +590,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy_path=arguments.policy,
             sandbox_binary=arguments.sandbox_binary,
         )
+        if arguments.openclaw_state is not None:
+            repair_legacy_openclaw_skill_workspaces(
+                openclaw_state=arguments.openclaw_state,
+                policy_path=arguments.policy,
+                sandbox_binary=arguments.sandbox_binary,
+            )
     except (WorkspaceMountError, SystemExit) as error:
         if isinstance(error, SystemExit) and error.code == 0:
             return 0

@@ -2085,3 +2085,43 @@ def test_configuration_failure_keeps_redacted_bounded_paths(
     assert (
         len(runtime_configuration._config_validation_error("x" * 4000, "", 1)) <= 1000
     )
+
+
+def test_catalog_failure_retains_safe_runtime_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "openclaw"
+    binary.write_text("binary")
+    binary.chmod(0o700)
+    state = tmp_path / "state"
+    state.mkdir()
+    config = state / "model.json"
+    config.write_text("{}")
+    secret = "diagnostic-fixture-credential-not-a-real-key"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+
+    def fail_catalog(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="",
+            stderr="Plugin host link is unavailable at npm/projects/provider: apiKey="
+            + secret
+            + "\n"
+            + "x" * 1800,
+        )
+
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", fail_catalog)
+    result = inspect_openclaw_model(
+        openclaw_binary=binary,
+        openclaw_state_dir=state,
+        config_path=config,
+        model="deepseek/deepseek-v4-flash",
+    )
+    assert not result.available
+    assert result.error is not None
+    assert "status 1" in result.error and "Plugin host link" in result.error
+    assert "npm/projects/provider" in result.error
+    assert secret not in result.error and "[redacted]" in result.error
+    assert len(result.error) < 700

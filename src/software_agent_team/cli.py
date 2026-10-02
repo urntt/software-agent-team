@@ -184,6 +184,7 @@ from software_agent_team.teams import (
 )
 from software_agent_team.terminal_input import DEFAULT_TERMINAL_INPUT
 from software_agent_team.terminal_metrics import TerminalRunMetrics
+from software_agent_team.terminal_presentation import display_text
 from software_agent_team.updates import (
     ForegroundUpdateObservation,
     ManagedChangePlan,
@@ -209,7 +210,11 @@ from software_agent_team.versioning import (
     render_version_report,
 )
 from software_agent_team.workflow import WorkflowCoordinator, WorkflowOutcome
-from software_agent_team.workspace_mounts import prepare_sandbox_skill_mountpoint
+from software_agent_team.workspace_mounts import (
+    WorkspaceMountError,
+    prepare_sandbox_skill_mountpoint,
+    repair_legacy_openclaw_skill_workspaces,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEAM_CONFIG = PROJECT_ROOT / "configs/teams.json"
@@ -2525,15 +2530,24 @@ def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
     state_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if state_dir.is_symlink() or (state_dir.exists() and not state_dir.is_dir()):
         raise RuntimeConfigurationError("SAT OpenClaw state must be a real directory")
+    try:
+        repair_legacy_openclaw_skill_workspaces(
+            openclaw_state=state_dir,
+            policy_path=DEFAULT_PRODUCT_POLICY,
+        )
+    except WorkspaceMountError as error:
+        raise RuntimeConfigurationError(str(error)) from error
+    links: dict[Path, Path] = {}
     if state_dir.exists():
         for entry in state_dir.rglob("*"):
             if entry.is_symlink():
-                raise RuntimeConfigurationError(
-                    "SAT OpenClaw state cannot contain symbolic links during setup"
+                links[entry.relative_to(state_dir)] = _staged_npm_link_target(
+                    entry, state_dir=state_dir
                 )
-            if not entry.is_dir() and not entry.is_file():
+            elif not entry.is_dir() and not entry.is_file():
                 raise RuntimeConfigurationError(
-                    "SAT OpenClaw state contains an unsupported filesystem entry"
+                    "SAT OpenClaw state contains an unsupported filesystem entry: "
+                    f"{display_text(str(entry))}"
                 )
     candidate = Path(
         tempfile.mkdtemp(
@@ -2544,11 +2558,83 @@ def _staged_openclaw_state(state_dir: Path) -> Iterator[tuple[Path, Path]]:
     os.chmod(candidate, 0o700)
     try:
         if state_dir.exists():
-            shutil.copytree(state_dir, candidate, dirs_exist_ok=True)
+            shutil.copytree(state_dir, candidate, dirs_exist_ok=True, symlinks=True)
+            for relative, target in links.items():
+                staged_link = candidate / relative
+                staged_link.unlink()
+                relocated = (
+                    candidate / target.relative_to(state_dir)
+                    if target.is_relative_to(state_dir)
+                    else target
+                )
+                staged_link.symlink_to(
+                    os.path.relpath(relocated, staged_link.parent)
+                    if target.is_relative_to(state_dir)
+                    else relocated
+                )
         yield candidate, candidate / "openclaw.json"
     finally:
         if candidate.exists():
             shutil.rmtree(candidate)
+
+
+def _staged_npm_link_target(entry: Path, *, state_dir: Path) -> Path:
+    """Relocate internal npm links and bind host peers to the current private SDK.
+
+    Copying links never copies their external targets. Authoritative config,
+    credentials and sessions still reject links. A legacy SDK peer is accepted
+    only inside npm node_modules and only from a marked SAT runtime.
+    """
+
+    relative = entry.relative_to(state_dir)
+    raw_target = Path(os.readlink(entry))
+    target = Path(
+        os.path.normpath(
+            raw_target if raw_target.is_absolute() else entry.parent / raw_target
+        )
+    )
+    npm = state_dir / "npm"
+    if relative.parts[0] == "npm" and "node_modules" in relative.parts:
+        if target.is_relative_to(npm):
+            return target
+        if relative.parts[-2:] == ("node_modules", "openclaw"):
+            old_runtime = next(
+                (
+                    p
+                    for p in target.parents
+                    if p.name == "openclaw" and p.parent.name == ".sat"
+                ),
+                None,
+            )
+            current_runtime = DEFAULT_OPENCLAW_BINARY.parent.parent
+            if (
+                old_runtime is not None
+                and _owned_openclaw_runtime(old_runtime)
+                and _owned_openclaw_runtime(current_runtime)
+            ):
+                host = current_runtime / "runtime/node_modules/openclaw"
+                if host.is_dir() and not host.is_symlink() and host.resolve() == host:
+                    return host
+    raise RuntimeConfigurationError(
+        "unsupported symbolic link in SAT OpenClaw state: "
+        f"{display_text(str(entry))}. Configuration and credentials were not changed. "
+        "Restore that exact entry as a real file or directory before retrying setup."
+    )
+
+
+def _owned_openclaw_runtime(root: Path) -> bool:
+    marker = root / ".sat-owned-runtime"
+    try:
+        if root.is_symlink() or marker.is_symlink():
+            return False
+        if root.stat().st_uid != os.geteuid() or marker.stat().st_uid != os.geteuid():
+            return False
+        return marker.read_text(encoding="utf-8").splitlines() == [
+            "software-agent-team-openclaw-runtime-v1",
+            f"root={root}",
+        ]
+    except (OSError, UnicodeError):
+        return False
 
 
 def _replace_exact_private_file(

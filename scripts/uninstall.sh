@@ -493,17 +493,21 @@ fi
 repair_legacy_workspace_mountpoints() {
   [[ -f "$task_product_policy" && ! -L "$task_product_policy" ]] || \
     fail "SAT's sandbox policy is unavailable for workspace ownership preflight"
+  local task_repair_arguments=()
+  if [[ "$task_provider_policy" == "purge" ]]; then
+    task_repair_arguments+=(--openclaw-state "$task_state_root/openclaw")
+  fi
   "$task_python" -m software_agent_team.workspace_mounts \
     --workspaces-root "$task_workspaces_root" \
     --policy "$task_product_policy" \
-    --sandbox-binary "$task_sandbox_binary" || \
+    --sandbox-binary "$task_sandbox_binary" "${task_repair_arguments[@]}" || \
     fail "legacy sandbox workspace ownership could not be repaired safely; nothing was deleted"
 }
 
 # Older OpenClaw versions could leave an empty nested bind target owned by root.
 # Repair that exact historical shape before export or any selected deletion, so
 # a failed compatibility preflight cannot partially purge configuration or data.
-if [[ -n "$task_export_to" || "$task_data_policy" == "purge" ]]; then
+if [[ -n "$task_export_to" || "$task_data_policy" == "purge" || "$task_provider_policy" == "purge" ]]; then
   repair_legacy_workspace_mountpoints
 fi
 

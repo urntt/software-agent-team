@@ -554,6 +554,7 @@ def inspect_openclaw_model(
             f"({type(error).__name__}); no provider request was made"
         ) from error
     if result.returncode != 0:
+        detail = display_text(result.stderr or result.stdout, limit=600)
         return OpenClawModelInspection(
             model=normalized,
             runtime_profile_sha256=(
@@ -564,7 +565,8 @@ def inspect_openclaw_model(
                 runtime_profile.endpoint_kind if runtime_profile is not None else None
             ),
             available=False,
-            error=f"OpenClaw model listing exited with status {result.returncode}",
+            error=f"OpenClaw model listing exited with status {result.returncode}"
+            + (f": {detail}" if detail else ""),
         )
     try:
         payload = json.loads(result.stdout)

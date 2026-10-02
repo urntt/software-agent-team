@@ -477,6 +477,14 @@ rejected. Credential values remain in OpenClaw's private auth store or the
 trusted caller environment and never enter the effective config, profile, or
 digest.
 
+Configuration staging preserves npm-managed internal links without following
+their targets. A plugin's `node_modules/openclaw` peer may refer to a previous
+marked SAT runtime; the staged copy binds that peer to the current private SDK.
+Internal links become relative so they remain valid after activation. Links in
+configuration, credentials, sessions, or npm entries that escape these boundaries
+are refused with the affected path. Catalog failures retain a bounded, redacted
+runtime diagnostic; a nonzero local catalog exit is not a provider outage.
+
 Reconfigure or inspect the secret-free values with:
 
 ```bash
@@ -898,6 +906,23 @@ process leases are never exported and are removed with the application. When
 data and provider state are both purged, the ownership marker and empty state
 root are removed too. An unknown future category fails closed instead of being
 silently preserved under a successful full-purge message.
+
+Older Docker bind setup may also have left empty, root-owned SDK skill directories
+under `openclaw/sandbox/skills-workspaces/`. Before provider configuration staging
+or an explicitly selected provider purge, SAT verifies the state owner, inactive
+runs/processes/sandboxes, each exact directory identity, and the known empty
+mountpoint shape. A fixed, networkless helper in the verified local quality image
+restores only those directories to the invoking UID/GID. It mounts only the sandbox
+cache, never the provider root or credentials, and uses neither recursive chown nor
+sudo. Unknown owners, links, unexpected directories, and nonempty skill leaves
+fail safely. The current pinned SDK already skips missing skill mount sources;
+this compatibility operation handles directories retained from older releases.
+
+If a later purge fails after export or earlier cleanup, the error retains those
+completed steps, the bounded filesystem path and OS error category. The application
+remains installed until state cleanup succeeds. Check the completed export before
+retrying; omit export or select a new nonexistent destination rather than overwriting
+the previous export. The export still excludes provider credentials.
 
 The same Python lifecycle transaction owns configuration removal. With the
 normal or `XDG_CONFIG_HOME` layout, `--purge-config` removes `config.json` and

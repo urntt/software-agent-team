@@ -29,10 +29,34 @@ from software_agent_team.state_layout import (
     describe_state_layout_failure,
     inspect_state_layout,
 )
+from software_agent_team.terminal_presentation import display_text
 
 
 class UninstallStateError(RuntimeError):
     """Raised when state cannot be exported or removed within its authority."""
+
+    def __init__(self, message: str, *, completed_messages: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.completed_messages = tuple(completed_messages)
+
+
+def _operation_failure(
+    label: str,
+    error: OSError,
+    *,
+    completed_messages: Sequence[str] = (),
+) -> UninstallStateError:
+    """Expose a safe syscall category and retain already completed lifecycle steps."""
+
+    category = errno.errorcode.get(error.errno, "unknown")
+    detail = f"{type(error).__name__}; errno={error.errno} ({category})"
+    path = f"; path={display_text(str(error.filename))}" if error.filename else ""
+    return UninstallStateError(
+        f"{label} ({detail}{path}). Fix the permissions or availability of that exact "
+        "path and retry uninstall. Completed exports remain preserved; omit export "
+        "on retry or choose a new destination after checking the existing export.",
+        completed_messages=completed_messages,
+    )
 
 
 class UninstallPolicy(StrEnum):
@@ -308,7 +332,9 @@ def _copy_export(
     except UninstallStateError:
         raise
     except OSError as error:
-        raise UninstallStateError("SAT state export could not complete") from error
+        raise _operation_failure(
+            "SAT state export could not complete", error
+        ) from error
     finally:
         if _lexists(staging):
             shutil.rmtree(staging)
@@ -328,8 +354,10 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
         try:
             request.config_path.unlink(missing_ok=True)
         except OSError as error:
-            raise UninstallStateError(
-                "SAT configuration could not be deleted"
+            raise _operation_failure(
+                "SAT configuration could not be deleted",
+                error,
+                completed_messages=messages,
             ) from error
         messages.append(f"uninstall: deleted SAT configuration {request.config_path}")
         config_directory = request.config_directory
@@ -342,8 +370,10 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
                 config_directory.rmdir()
             except OSError as error:
                 if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
-                    raise UninstallStateError(
-                        "empty SAT configuration directory could not be deleted"
+                    raise _operation_failure(
+                        "empty SAT configuration directory could not be deleted",
+                        error,
+                        completed_messages=messages,
                     ) from error
                 messages.append(
                     "uninstall: preserved non-empty SAT configuration directory "
@@ -370,9 +400,14 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
                 try:
                     shutil.rmtree(path)
                 except OSError as error:
-                    raise UninstallStateError(
-                        f"SAT {category.directory_name} state could not be deleted"
+                    raise _operation_failure(
+                        f"SAT {category.directory_name} state could not be deleted",
+                        error,
+                        completed_messages=messages,
                     ) from error
+                messages.append(
+                    f"uninstall: deleted SAT {category.directory_name} state"
+                )
         messages.append(
             "uninstall: deleted runs, workspaces, sources, Planning, and "
             "self-check evidence"
@@ -387,16 +422,20 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
         try:
             shutil.rmtree(paths.process_leases)
         except OSError as error:
-            raise UninstallStateError(
-                "inactive SAT process lease state could not be deleted"
+            raise _operation_failure(
+                "inactive SAT process lease state could not be deleted",
+                error,
+                completed_messages=messages,
             ) from error
     if request.provider_policy is UninstallPolicy.PURGE:
         if _lexists(paths.openclaw):
             try:
                 shutil.rmtree(paths.openclaw)
             except OSError as error:
-                raise UninstallStateError(
-                    "SAT isolated provider state could not be deleted"
+                raise _operation_failure(
+                    "SAT isolated provider state could not be deleted",
+                    error,
+                    completed_messages=messages,
                 ) from error
         messages.append("uninstall: deleted SAT's isolated OpenClaw provider state")
     else:
@@ -407,14 +446,18 @@ def apply_uninstall_state(request: UninstallStateRequest) -> UninstallStateResul
         try:
             remaining = {entry.name for entry in paths.root.iterdir()}
         except OSError as error:
-            raise UninstallStateError("SAT state root cannot be finalized") from error
+            raise _operation_failure(
+                "SAT state root cannot be finalized", error, completed_messages=messages
+            ) from error
         if remaining == {STATE_MARKER_NAME}:
             try:
                 (paths.root / STATE_MARKER_NAME).unlink()
                 paths.root.rmdir()
             except OSError as error:
-                raise UninstallStateError(
-                    "empty SAT state root could not be deleted"
+                raise _operation_failure(
+                    "empty SAT state root could not be deleted",
+                    error,
+                    completed_messages=messages,
                 ) from error
             state_root_removed = True
     return UninstallStateResult(
@@ -464,6 +507,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             for message in result.messages:
                 print(message)
     except (UninstallStateError, ValueError) as error:
+        if isinstance(error, UninstallStateError):
+            for message in error.completed_messages:
+                print(message, flush=True)
         print(f"uninstall state: {error}", file=sys.stderr)
         return 1
     return 0
