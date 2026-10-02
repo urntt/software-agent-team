@@ -9,36 +9,42 @@ the [history map](docs/history/README.md).
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.7`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.7),
-tagged at `c8751996621129bba8dc7d5bd426d1323d4c57f7`. Its normal
-[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/36983650646)
-succeeded: hosted canonical passed 2,070 tests with four environment skips.
-Official bootstrap, manifest, and source-archive identities and digests were
-independently verified. The patch includes legacy provider-state recovery,
-partial uninstall/catalog diagnostics, and validation-fixture lifecycle fixes.
-The earlier Linux implementation gate passed 2,073 tests with one root-only
-skip. This publication does not constitute a new WSL or provider-backed journey.
+The latest published stable release is [`v0.6.8`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.8),
+tagged at `84f8e825e5c766f2ae5a097f27578b0df8dab481`. Its normal
+[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/36989698626)
+succeeded. Both candidate and tag canonical gates passed 2,070 tests with four
+environment skips, with the exact source clean. Official bootstrap, manifest,
+and source-archive identities and digests were independently verified.
 
-A fresh ordinary Linux account installed 0.6.7 from the public stable bootstrap.
-Another installed immutable 0.6.6 and upgraded to 0.6.7 through `sat update`.
-Exact identities/runtime paths, state preservation, same-target no-op, channel
-switches, active-run refusal, injected rollback, export, and uninstall passed.
-The test accounts and attributable resources were removed with the prior Docker
-inventory unchanged. These are installation-lifecycle checks, without provider
-generation or the original WSL configuration-repair acceptance.
+A same-machine WSL report confirmed that 0.6.7 upgraded successfully but still
+refused the historical provider peer during first-run configuration. Read-only
+metadata confirmed that the old SDK directory was gone and the current SDK's
+ownership marker and host were valid. Normal activation retains only the active
+release and its direct predecessor; requiring the retired SDK's marker therefore
+made configuration recovery incompatible with normal cleanup.
 
-A subsequent same-machine WSL report confirmed that 0.6.7 upgraded successfully
-but still refused the historical provider peer during first-run configuration.
-Read-only metadata confirmed that its old SDK directory was gone and the current
-SDK's ownership marker and host were valid. Normal activation retains only the
-active release and its direct predecessor; requiring the retired SDK's marker
-therefore made configuration recovery incompatible with normal cleanup.
-The 0.6.8 candidate recognizes both historical SDK package layouts and permits
-rebinding a missing sibling only after validating the current active managed
-lifecycle. It never follows or recreates the old target. The regression crosses
-production activation, retirement, staging, cancellation, and configuration
-commit, and retains negative checks for unrelated, unknown, and unowned targets.
-Publication and the original WSL repair acceptance remain pending.
+The 0.6.8 fix recognizes both historical SDK package layouts and permits rebinding
+a missing sibling only after validating the current active managed lifecycle.
+It never follows or recreates the old target. The regression crosses production
+activation, retirement, staging, cancellation, and configuration commit, with
+negative checks for unrelated, unknown, and unowned targets. Seventy-five focused
+migration and managed-install checks passed.
+
+An ordinary Linux account installed the exact 0.6.8 candidate and started `sat`
+with a dangling SDK peer matching the reported shape. The real provider-setup
+prompt was reached, SIGINT exited 130, and cancellation preserved the original
+peer and opaque credential fixture. Production staging/commit and actual Node
+loading of the rebound SDK package passed, without changing the current SDK or
+recreating the retired directory. Export, uninstall, and attributable cleanup
+passed with the prior Docker inventory unchanged. A separate ordinary account installed public 0.6.7 and upgraded to 0.6.8 through
+normal `sat update`, with the dangling peer present before upgrade. Exact stable
+identity, state preservation, SDK-peer staging/commit, same-target no-op, export,
+and canonical `sat uninstall` passed; cleanup preserved the prior Docker
+inventory. The unchanged channel/rollback owners reuse 0.6.7 evidence after
+component comparison, rather than claiming the whole matrix was rerun.
+The original same-machine WSL acceptance remains pending. These checks do not
+constitute a provider-backed journey or determine the earlier catalog failure's
+cause.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
