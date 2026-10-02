@@ -202,6 +202,8 @@ def test_schema_one_migrates_in_production_transaction_without_changing_live_sta
         with closing(sqlite3.connect(paths.openclaw / "state/openclaw.sqlite")) as db:
             registered = db.execute("SELECT path FROM agent_databases").fetchall()
         assert registered
+        with cli._staged_openclaw_state(paths.openclaw) as (reconfigured, _):
+            assert sdk_status(reconfigured).returncode == 0
         assert all(
             "/sat-state" not in row[0] and ".candidate-" not in row[0]
             for row in registered
