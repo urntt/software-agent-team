@@ -271,6 +271,9 @@ preflight commands retain a 30-second limit. Both values are recorded as
 infrastructure-check settings and are independent of the timeout later granted
 to any Agent. If model inspection times out, SAT identifies that exact phase,
 states that no provider request was made, and stops before creating an Agent.
+If the SDK catalog defers its auth-availability flag, SAT completes the same
+bounded check with the SDK's local auth/runtime readiness command. It makes no
+provider request and does not display credential-bearing status output.
 
 OpenClaw keeps role sandboxes alive for session reuse by default. SAT's run
 sessions are unique and immutable, so SAT removes the exact run-scoped role

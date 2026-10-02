@@ -475,6 +475,89 @@ def materialize_model_check_configuration(
     )
 
 
+def _inspect_deferred_model_auth(
+    *,
+    openclaw_binary: Path,
+    state_dir: Path,
+    config_path: Path,
+    configured: dict[str, Any],
+    model: str,
+    owner: str | None,
+    deadline: float,
+    timeout_seconds: int,
+) -> str | None:
+    """Resolve an omitted catalog flag through the SDK's local readiness check.
+
+    A catalog projection can defer auth availability for inherited agent-local
+    profiles. The SDK's `--check` owns readiness; `--probe` is never enabled.
+    Inspect only the requested route, including an approved unused fallback,
+    without changing the runtime roster, saved config, or credential owner.
+    """
+
+    payload = json.loads(json.dumps(configured))
+    agents = payload.setdefault("agents", {})
+    if not isinstance(agents, dict):
+        return "OpenClaw local auth inspection has no valid Agent configuration"
+    defaults = agents.setdefault("defaults", {})
+    if not isinstance(defaults, dict):
+        return "OpenClaw local auth inspection has no valid model defaults"
+    defaults["model"] = {"primary": model, "fallbacks": []}
+    if owner is not None:
+        agents["entries"][owner]["model"] = {"primary": model, "fallbacks": []}
+    argv = [str(openclaw_binary), "models", "status", "--json", "--check"]
+    if owner is not None:
+        argv.extend(("--agent", owner))
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=".model-auth-check-", dir=config_path.parent
+        ) as temporary:
+            auth_config = _persist_private_json(
+                payload,
+                Path(temporary) / "openclaw.json",
+                label="local auth inspection configuration",
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout_seconds)
+            result = subprocess.run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=remaining,
+                env=os.environ
+                | isolated_openclaw_environment(
+                    state_dir=state_dir, config_path=auth_config
+                ),
+                shell=False,
+            )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeConfigurationError(
+            "OpenClaw model inspection timed out after "
+            f"{timeout_seconds} seconds; no provider request was made"
+        ) from error
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeConfigurationError(
+            "OpenClaw local auth inspection failed before completion "
+            f"({type(error).__name__}); no provider request was made"
+        ) from error
+    # Status output contains credential labels and masked fragments. Never put
+    # stdout/stderr into a diagnostic, even when the SDK check fails.
+    if result.returncode != 0:
+        return (
+            "OpenClaw local auth/runtime readiness check exited with status "
+            f"{result.returncode} for {model}; no provider request was made"
+        )
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return "OpenClaw local auth inspection returned invalid JSON"
+    if not isinstance(status, dict) or status.get("resolvedDefault") != model:
+        return "OpenClaw local auth inspection did not verify the requested model"
+    return None
+
+
 def inspect_openclaw_model(
     *,
     openclaw_binary: Path,
@@ -512,6 +595,7 @@ def inspect_openclaw_model(
     argv = [str(openclaw_binary), "models", "list", "--json"]
     agents = configured.get("agents") if isinstance(configured, dict) else None
     entries = agents.get("entries") if isinstance(agents, dict) else None
+    owner = None
     if isinstance(entries, dict) and entries:
         # Catalog/auth inspection needs an explicit existing roster owner.
         # Unassigned approved fallback routes share that owner's local catalog;
@@ -527,6 +611,7 @@ def inspect_openclaw_model(
             next(iter(entries)),
         )
         argv.extend(("--agent", owner))
+    deadline = time.monotonic() + timeout_seconds
     try:
         result = subprocess.run(
             argv,
@@ -617,7 +702,21 @@ def inspect_openclaw_model(
             error=f"OpenClaw does not recognize the configured model: {normalized}",
         )
     matched = matches[0]
-    if matched.get("available") is not True:
+    availability = matched.get("available")
+    auth_error = None
+    if availability is None and isinstance(configured, dict):
+        auth_error = _inspect_deferred_model_auth(
+            openclaw_binary=openclaw_binary,
+            state_dir=openclaw_state_dir,
+            config_path=config_path,
+            configured=configured,
+            model=normalized,
+            owner=owner,
+            deadline=deadline,
+            timeout_seconds=timeout_seconds,
+        )
+        availability = auth_error is None
+    if availability is not True:
         return OpenClawModelInspection(
             model=normalized,
             runtime_profile_sha256=(
@@ -629,7 +728,8 @@ def inspect_openclaw_model(
             ),
             available=False,
             error=(
-                "OpenClaw has no available catalog/auth route for the configured "
+                auth_error
+                or "OpenClaw has no available catalog/auth route for the configured "
                 f"model: {normalized}"
             ),
         )

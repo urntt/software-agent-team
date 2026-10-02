@@ -165,7 +165,7 @@ wheels = [
 
 [[package]]
 name = "software-agent-team"
-version = "0.6.9"
+version = "0.6.10"
 source = { editable = "." }
 dependencies = [
     { name = "json5" },

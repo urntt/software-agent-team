@@ -1404,6 +1404,237 @@ def test_model_inspection_rejects_missing_or_unavailable_exact_model(
     assert error in result.error
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "status", "ready"),
+    [
+        (0, {"resolvedDefault": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL}, True),
+        (1, {"resolvedDefault": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL}, False),
+        (2, {"resolvedDefault": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL}, False),
+        (0, {"resolvedDefault": "provider/different"}, False),
+        (0, {}, False),
+    ],
+)
+def test_deferred_catalog_auth_checks_exact_route_without_exposing_status(
+    tmp_path, monkeypatch, exit_code, status, ready
+):
+    binary = tmp_path / "openclaw"
+    binary.write_text("binary")
+    binary.chmod(0o755)
+    state = tmp_path / "private-state"
+    state.mkdir()
+    config = tmp_path / "runtime.json"
+    config.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "ownership": "explicit",
+                    "defaults": {"model": {"primary": "provider/primary"}},
+                    "entries": {
+                        "approved_writer": {
+                            "model": {"primary": "provider/primary"},
+                            "tools": {"allow": ["read"]},
+                        }
+                    },
+                }
+            }
+        )
+    )
+    before = config.read_bytes()
+    calls = []
+    status["credential_label"] = "private-credential-fragment"
+
+    def sdk(argv, **kwargs):
+        calls.append(argv)
+        assert "--probe" not in argv
+        assert kwargs["stdin"] == subprocess.DEVNULL
+        assert kwargs["env"]["OPENCLAW_STATE_DIR"] == str(state)
+        if argv[1:3] == ["models", "list"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"models": [{"key": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL}]}),
+                "",
+            )
+        assert argv[1:] == [
+            "models",
+            "status",
+            "--json",
+            "--check",
+            "--agent",
+            "approved_writer",
+        ]
+        checked = Path(kwargs["env"]["OPENCLAW_CONFIG_PATH"])
+        assert checked != config
+        assert checked.stat().st_mode & 0o777 == 0o600
+        payload = json.loads(checked.read_text())
+        assert payload["agents"]["ownership"] == "explicit"
+        assert set(payload["agents"]["entries"]) == {"approved_writer"}
+        assert payload["agents"]["entries"]["approved_writer"]["tools"] == {
+            "allow": ["read"]
+        }
+        assert payload["agents"]["entries"]["approved_writer"]["model"] == {
+            "primary": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL,
+            "fallbacks": [],
+        }
+        assert 0 < kwargs["timeout"] <= 90
+        return subprocess.CompletedProcess(
+            argv, exit_code, json.dumps(status), "private-credential-fragment"
+        )
+
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", sdk)
+    result = inspect_openclaw_model(
+        openclaw_binary=binary,
+        openclaw_state_dir=state,
+        config_path=config,
+        model=DEEPSEEK_OFFICIAL_V4_FLASH_MODEL,
+    )
+    assert result.available is ready
+    assert "private-credential-fragment" not in str(result)
+    assert len(calls) == 2
+    assert config.read_bytes() == before
+    assert not tuple(tmp_path.glob(".model-auth-check-*"))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "invalid_json"])
+def test_deferred_auth_retains_one_deadline_and_safe_failure(
+    tmp_path, monkeypatch, failure
+):
+    binary = tmp_path / "openclaw"
+    binary.write_text("binary")
+    binary.chmod(0o755)
+    state = tmp_path / "state"
+    state.mkdir()
+    config = tmp_path / "config.json"
+    config.write_text("{}")
+    clock = {"elapsed": 0}
+    monkeypatch.setattr(
+        runtime_configuration.time, "monotonic", lambda: clock["elapsed"]
+    )
+
+    def sdk(argv, **kwargs):
+        if argv[1:3] == ["models", "list"]:
+            clock["elapsed"] = 75
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "models": [
+                            {"key": DEEPSEEK_OFFICIAL_V4_FLASH_MODEL, "available": None}
+                        ]
+                    }
+                ),
+                "",
+            )
+        assert kwargs["timeout"] == 15
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(
+                [*argv, "private-fragment"], 15, stderr="private-fragment"
+            )
+        return subprocess.CompletedProcess(argv, 0, "private-fragment{", "")
+
+    monkeypatch.setattr(runtime_configuration.subprocess, "run", sdk)
+    arguments = dict(
+        openclaw_binary=binary,
+        openclaw_state_dir=state,
+        config_path=config,
+        model=DEEPSEEK_OFFICIAL_V4_FLASH_MODEL,
+    )
+    if failure == "timeout":
+        with pytest.raises(
+            RuntimeConfigurationError, match="after 90 seconds"
+        ) as caught:
+            inspect_openclaw_model(**arguments)
+        assert "private-fragment" not in str(caught.value)
+    else:
+        result = inspect_openclaw_model(**arguments)
+        assert not result.available
+        assert result.error == "OpenClaw local auth inspection returned invalid JSON"
+        assert "private-fragment" not in str(result)
+    assert config.read_text() == "{}"
+    assert not tuple(tmp_path.glob(".model-auth-check-*"))
+
+
+@pytest.mark.parametrize("phase", ["clarification", "planning", "execution"])
+@pytest.mark.parametrize("credentials", [False, True])
+def test_sdk_agent_local_auth_crosses_production_runtime_inspection(
+    tmp_path, monkeypatch, phase, credentials
+):
+    """Exercise SDK SQLite auth inheritance, rather than inventing readiness."""
+    package = pinned_openclaw_package(REPOSITORY_ROOT)
+    node = pinned_openclaw_node(REPOSITORY_ROOT)
+    binary = pinned_openclaw_binary(REPOSITORY_ROOT)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    state = tmp_path / "private-state"
+    state.mkdir()
+    model = DEEPSEEK_OFFICIAL_V4_FLASH_MODEL
+    base = runtime_configuration.materialize_model_check_configuration(
+        state / "openclaw.json", model=model
+    )
+    if credentials:
+        facade = next(
+            p
+            for p in (package / "dist").glob("auth-profiles-*.mjs")
+            if "saveAuthProfileStore," in p.read_text()
+        )
+        seed = tmp_path / "seed.mjs"
+        seed.write_text(
+            "import {saveAuthProfileStore} from "
+            + json.dumps(facade.as_uri())
+            + ";\nsaveAuthProfileStore({version:1,profiles:{fixture:{"
+            + 'type:"api_key",provider:"deepseek",key:"non-secret-fixture"}}},'
+            + json.dumps(str(state / "agents/main/agent"))
+            + ",{syncExternalCli:false});\n"
+        )
+        seeded = subprocess.run(
+            [str(node), str(seed)],
+            env=os.environ
+            | runtime_configuration.isolated_openclaw_environment(
+                state_dir=state, config_path=base
+            ),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert seeded.returncode == 0, "SDK fixture auth persistence failed"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    if phase == "execution":
+        plan = adaptive_team_plan().model_copy(
+            update={
+                "model_routes": ModelRoutePlan(
+                    mode=ModelRoutingMode.STRICT,
+                    default_route_id="default",
+                    routes=(ModelRoute(id="default", model=model),),
+                )
+            }
+        )
+        selection = {"team_plan": plan}
+    else:
+        selection = {"bootstrap_capability": AgentCapability(phase)}
+    config = materialize_run_configuration(
+        OPENCLAW_TEMPLATE,
+        tmp_path / "runtime.json",
+        manifest=load_team_manifest(TEAM_CONFIG),
+        workspace=workspace,
+        sandbox_image="sat-agent:phase1",
+        sandbox_user="1000:1000",
+        model=model,
+        **selection,
+    )
+    before = config.read_bytes()
+    result = inspect_openclaw_model(
+        openclaw_binary=binary,
+        openclaw_state_dir=state,
+        config_path=config,
+        model=model,
+    )
+    assert result.available is credentials, result.error
+    assert config.read_bytes() == before
+    assert "non-secret-fixture" not in before.decode()
+    assert not tuple(tmp_path.glob(".model-auth-check-*"))
+
+
 def test_preflight_executes_explicit_commands_without_provider_call(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

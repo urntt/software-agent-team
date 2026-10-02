@@ -190,6 +190,14 @@ provider request. Run this affected set on a prepared runtime/image; an
 unprepared checkout skips the live prerequisites rather than fabricating SDK
 migration success.
 
+The pinned-SDK auth cases in `tests/test_runtime_configuration.py` persist a
+non-secret Agent-local API-key fixture through the SDK, then inspect actual
+Clarification, Planning, and approved execution configurations. They cover
+deferred catalog availability with valid inherited auth and a missing-auth
+negative case, without provider requests. Boundary regressions also preserve
+the exact roster/model, original config, shared inspection deadline, and safe
+diagnostics when SDK status is missing, malformed, mismatched, or expired.
+
 For the pinned SQLite compression boundary, select only
 `--scenario submission-contract --prompt-padding-chars 100000` and inspect
 the retained session store for an `event_zstd` row. This drives the actual

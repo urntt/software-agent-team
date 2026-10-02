@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "baseline_version": "0.6.8",
-  "target_version": "0.6.9",
+  "baseline_version": "0.6.9",
+  "target_version": "0.6.10",
   "changes": [
     {
-      "id": "private-sdk-database-migration",
+      "id": "deferred-sdk-model-auth-readiness",
       "impact": "patch",
-      "summary": "Migrate historical provider SQLite state with the pinned SDK inside the reversible configuration transaction, preserving live credentials and bounding filesystem, network, and container cleanup authority"
+      "summary": "Verify deferred catalog availability through the pinned SDK local readiness check for the exact authorized model and Agent, preserving credentials, runtime configuration, bounded timeouts and safe diagnostics"
     }
   ]
 }

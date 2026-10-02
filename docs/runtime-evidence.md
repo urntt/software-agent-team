@@ -1705,3 +1705,14 @@ Local model catalog/auth checks also pass an explicit existing roster owner via
 model, or an existing roster Agent for an approved, unassigned fallback route.
 This read-only catalog context does not reassign tasks or create an ambient
 execution/heartbeat owner. No model generation is performed by these checks.
+
+The SDK can return `available: null` (or omit that flag) when catalog auth
+projection is deferred for an inherited Agent-local credential. SAT then asks
+the SDK's `models status --json --check` for the same roster owner and exact
+model. A temporary, secret-free inspection config selects only that route;
+the saved config and runtime roster are unchanged. The local SDK check must
+succeed and identify the requested model. Explicit catalog unavailability,
+indeterminate/expired auth, malformed status, and mismatched models remain
+blocked. Catalog and deferred auth share one model-inspection deadline.
+`--probe` is never enabled, and status stdout/stderr are never projected into
+diagnostics because they can contain masked credential fragments.

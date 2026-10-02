@@ -41,9 +41,19 @@ cleanup preserved the prior Docker inventory. Original operator capacity/output
 assertion failures remain failures; continuations completed the remaining assertions
 in the same installations. This is not ordinary disk-capacity acceptance or a new
 provider-backed journey. Unchanged installation/channel/rollback owners reuse
-0.6.8 evidence after component comparison. Original same-machine WSL configuration,
-model checks, subsequent startup, and uninstall acceptance remain pending; the
-cause of the earlier catalog failure remains unknown.
+0.6.8 evidence after component comparison. Same-machine WSL update, configuration, a user-approved minimal provider check,
+and subsequent startup passed. Planning then stopped at local model preflight;
+export and uninstall acceptance remain pending. The earlier catalog failure
+cause remains unknown.
+
+The 0.6.10 checkout addresses deferred SDK catalog auth availability. A real
+Agent-local SDK credential can be usable while the catalog returns
+`available: null`. SAT now completes that observation with the SDK local
+auth/runtime readiness check for the exact model and roster owner, within the
+same deadline. Credentials remain with their SDK owner; no live probe is made
+and status output is excluded from diagnostics. Real pinned-SDK Clarification,
+Planning, approved execution, and missing-auth checks passed. Canonical and
+publication evidence will be recorded after their actual completion.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
