@@ -9,12 +9,14 @@ the [history map](docs/history/README.md).
 
 ## Release and checkout boundary
 
-The latest published stable release is [`v0.6.9`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.9),
-tagged at `d7384f013d94f2ed3af8bc6e9caca74c370e07aa`. Its normal
-[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/37000165888)
-succeeded. Candidate and tag canonical gates each passed 2,075 tests with ten
-environment skips and clean tracked source. Official latest, bootstrap, manifest,
-and independently fetched public-tag archive identities and digests were verified.
+The latest published stable release is [`v0.6.10`](https://github.com/urntt/software-agent-team/releases/tag/v0.6.10),
+tagged at `5ea0ba33317477efac18da2f7fde53703c040511`. Its normal
+[exact-tag gate and publisher](https://github.com/urntt/software-agent-team/actions/runs/37009621253)
+and main CI succeeded. The native candidate canonical gate passed 2,097 tests
+with one cross-UID fixture skip; the tag gate passed 2,088 with ten environment
+skips. Both recorded clean tracked source at the exact release revision.
+Official latest, bootstrap, manifest, and independently fetched public-tag
+archive identities and digests were verified.
 
 Configuration staging handles two historical SDK compatibility boundaries.
 Retired package peers can be rebound only after current managed-lifecycle and
@@ -46,14 +48,17 @@ and subsequent startup passed. Planning then stopped at local model preflight;
 export and uninstall acceptance remain pending. The earlier catalog failure
 cause remains unknown.
 
-The 0.6.10 checkout addresses deferred SDK catalog auth availability. A real
+The 0.6.10 release addresses deferred SDK catalog auth availability. A real
 Agent-local SDK credential can be usable while the catalog returns
 `available: null`. SAT now completes that observation with the SDK local
 auth/runtime readiness check for the exact model and roster owner, within the
 same deadline. Credentials remain with their SDK owner; no live probe is made
 and status output is excluded from diagnostics. Real pinned-SDK Clarification,
-Planning, approved execution, and missing-auth checks passed. Canonical and
-publication evidence will be recorded after their actual completion.
+Planning, approved execution, and missing-auth checks passed, along with the
+bounded-deadline, invalid-status, and exact-route failure checks. The same-machine
+WSL Planning preflight still needs confirmation after ordinary stable update;
+native fixtures do not replace that device evidence. No new provider-backed
+journey or paid model request was made for this patch.
 
 Managed activation has one image rollback owner and retains both primary and
 rollback errors. Container-referenced cleanup anchors remain attributable in
