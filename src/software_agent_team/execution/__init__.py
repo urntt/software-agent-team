@@ -27,6 +27,7 @@ from software_agent_team.execution.constants import (
     MAX_INITIALIZATION_PROCESS_SAMPLE_SECONDS,
     PROVIDER_ACTIVITY_REPORT_SECONDS,
 )
+from software_agent_team.artifacts import ProviderLivenessEvidence
 from software_agent_team.execution.liveness import (
     InitializationLivenessPolicy,
     MonotonicClock,
@@ -130,6 +131,7 @@ __all__ = [
     "MonotonicClock",
     "OpenClawSubprocessExecutor",
     "ProcessRunner",
+    "ProviderLivenessEvidence",
     "ProviderLivenessPolicy",
     "ResponseFinalizationPolicy",
     "ScriptedAgentExecutor",

@@ -8,6 +8,24 @@ final reports, preserving 100% backward compatibility for all callers and tests.
 
 from __future__ import annotations
 
+from software_agent_team.invocation_lifecycle import (
+    InvocationLifecycleEvidence,
+    InvocationStopReason,
+)
+from software_agent_team.response_corrections import (
+    ResponseValidationDiagnostic,
+    SemanticCorrectionOutcome,
+    SemanticCorrectionRequestEvidence,
+)
+from software_agent_team.submissions import (
+    ARTIFACT_SUBMISSION_PROTOCOL,
+    ARTIFACT_SUBMISSION_PROTOCOL_V1,
+    ARTIFACT_SUBMISSION_TOOL,
+    AgentSubmissionEvidence,
+    AgentSubmissionStatus,
+)
+from software_agent_team.versioning import SoftwareVersionReport
+
 from .envelope import (
     ArtifactReference,
     HandoffEnvelope,
@@ -95,44 +113,43 @@ from .types import (
 )
 
 __all__ = [
-    # Constants & Schemas
     "AGENT_ID_PATTERN",
     "ARTIFACT_MODELS",
     "ARTIFACT_SCHEMA_VERSION",
+    "ARTIFACT_SUBMISSION_PROTOCOL",
+    "ARTIFACT_SUBMISSION_PROTOCOL_V1",
+    "ARTIFACT_SUBMISSION_TOOL",
     "COMMIT_PATTERN",
     "IMPLEMENTATION_ROLES",
     "MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION",
     "REVIEW_ARTIFACT_KINDS",
     "REVIEW_BOUNDARY_DEFINITIONS",
-    # Task Brief Models
     "AcceptanceCriterion",
-    # Evidence & Telemetry Models
     "AgentExecutionRecord",
-    # Enums
     "AgentExecutionStatus",
     "AgentRole",
     "AgentRuntimeFailureCode",
+    "AgentSubmissionEvidence",
     "AgentSubmissionReceiptEvidence",
+    "AgentSubmissionStatus",
     "AgentToolCallEvidence",
     "AgentToolCallOutcome",
     "AgentToolEvidenceStatus",
     "ArtifactKind",
-    # Envelope & Core Artifacts
     "ArtifactReference",
     "CheckStatus",
-    # Implementation Models
     "CommandEvidence",
     "CriterionResult",
     "DeliveryMaturity",
-    # Review & Assessment Models
     "ExperienceAssessment",
     "ExperienceWorkflowAssessment",
-    # Reports & Top-level Dispatches
     "FinalReport",
     "FinalStatus",
     "HandoffEnvelope",
     "HandoffStatus",
     "ImplementationPlan",
+    "InvocationLifecycleEvidence",
+    "InvocationStopReason",
     "IterationArtifact",
     "IterationDecision",
     "IterationRecord",
@@ -147,6 +164,7 @@ __all__ = [
     "ProductDefinitionStatement",
     "ProductMaturityDefinition",
     "ProviderLivenessEvidence",
+    "ResponseValidationDiagnostic",
     "ReviewBoundaryCheck",
     "ReviewBoundaryKind",
     "ReviewCriterionAssessment",
@@ -161,10 +179,12 @@ __all__ = [
     "RuntimeToolRejection",
     "SecurityAssessment",
     "SecuritySurfaceAssessment",
+    "SemanticCorrectionOutcome",
+    "SemanticCorrectionRequestEvidence",
+    "SoftwareVersionReport",
     "TaskBrief",
     "TestReport",
     "WorkResult",
-    # Validation & Helper Functions
     "_require_clean_unique_items",
     "_require_safe_relative_path",
     "_require_utc",
