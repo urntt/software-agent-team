@@ -1,0 +1,178 @@
+"""Validated contracts for requests, phase artifacts, and Agent handoffs.
+
+This package provides strongly-typed Pydantic data models for artifact references,
+execution telemetry, task briefs, implementation plans, work results, command evidence,
+test reports, independent reviews, specialized assessments, iteration records, and
+final reports, preserving 100% backward compatibility for all callers and tests.
+"""
+
+from __future__ import annotations
+
+from .envelope import (
+    ArtifactReference,
+    HandoffEnvelope,
+    IterationArtifact,
+    PhaseArtifact,
+)
+from .evidence import (
+    AgentExecutionRecord,
+    AgentSubmissionReceiptEvidence,
+    AgentToolCallEvidence,
+    ReviewToolEvidenceReference,
+    RuntimeRejectionEvidence,
+    RuntimeToolRejection,
+    validate_tool_evidence_collection,
+)
+from .implementation import (
+    CommandEvidence,
+    CriterionResult,
+    ImplementationPlan,
+    PlanTask,
+    TestReport,
+    WorkResult,
+)
+from .reports import (
+    ARTIFACT_MODELS,
+    FinalReport,
+    IterationRecord,
+    PersistedArtifact,
+    parse_phase_artifact,
+    validate_artifact_context,
+)
+from .reviews import (
+    ExperienceAssessment,
+    ExperienceWorkflowAssessment,
+    ReviewBoundaryCheck,
+    ReviewCriterionAssessment,
+    ReviewFinding,
+    ReviewReport,
+    SecurityAssessment,
+    SecuritySurfaceAssessment,
+    _validate_specialized_assessment_scope,
+    collect_unresolved_review_findings,
+    resolve_acceptance_results,
+)
+from .task_brief import (
+    AcceptanceCriterion,
+    ProductDefinition,
+    ProductDefinitionBasis,
+    ProductDefinitionImpact,
+    ProductDefinitionStatement,
+    ProductMaturityDefinition,
+    TaskBrief,
+)
+from .types import (
+    AGENT_ID_PATTERN,
+    ARTIFACT_SCHEMA_VERSION,
+    COMMIT_PATTERN,
+    IMPLEMENTATION_ROLES,
+    MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION,
+    REVIEW_ARTIFACT_KINDS,
+    REVIEW_BOUNDARY_DEFINITIONS,
+    AgentExecutionStatus,
+    AgentRole,
+    AgentRuntimeFailureCode,
+    AgentToolCallOutcome,
+    AgentToolEvidenceStatus,
+    ArtifactKind,
+    CheckStatus,
+    DeliveryMaturity,
+    FinalStatus,
+    HandoffStatus,
+    IterationDecision,
+    ProductDefinitionDimension,
+    ProductDefinitionDisposition,
+    ProviderLivenessEvidence,
+    ReviewBoundaryKind,
+    ReviewCriterionStatus,
+    ReviewSeverity,
+    ReviewTerminationReason,
+    ReviewVerdict,
+    _require_clean_unique_items,
+    _require_safe_relative_path,
+    _require_utc,
+    review_boundary_definition_map,
+)
+
+__all__ = [
+    # Constants & Schemas
+    "AGENT_ID_PATTERN",
+    "ARTIFACT_MODELS",
+    "ARTIFACT_SCHEMA_VERSION",
+    "COMMIT_PATTERN",
+    "IMPLEMENTATION_ROLES",
+    "MINIMUM_READABLE_ARTIFACT_SCHEMA_VERSION",
+    "REVIEW_ARTIFACT_KINDS",
+    "REVIEW_BOUNDARY_DEFINITIONS",
+    # Task Brief Models
+    "AcceptanceCriterion",
+    # Evidence & Telemetry Models
+    "AgentExecutionRecord",
+    # Enums
+    "AgentExecutionStatus",
+    "AgentRole",
+    "AgentRuntimeFailureCode",
+    "AgentSubmissionReceiptEvidence",
+    "AgentToolCallEvidence",
+    "AgentToolCallOutcome",
+    "AgentToolEvidenceStatus",
+    "ArtifactKind",
+    # Envelope & Core Artifacts
+    "ArtifactReference",
+    "CheckStatus",
+    # Implementation Models
+    "CommandEvidence",
+    "CriterionResult",
+    "DeliveryMaturity",
+    # Review & Assessment Models
+    "ExperienceAssessment",
+    "ExperienceWorkflowAssessment",
+    # Reports & Top-level Dispatches
+    "FinalReport",
+    "FinalStatus",
+    "HandoffEnvelope",
+    "HandoffStatus",
+    "ImplementationPlan",
+    "IterationArtifact",
+    "IterationDecision",
+    "IterationRecord",
+    "PersistedArtifact",
+    "PhaseArtifact",
+    "PlanTask",
+    "ProductDefinition",
+    "ProductDefinitionBasis",
+    "ProductDefinitionDimension",
+    "ProductDefinitionDisposition",
+    "ProductDefinitionImpact",
+    "ProductDefinitionStatement",
+    "ProductMaturityDefinition",
+    "ProviderLivenessEvidence",
+    "ReviewBoundaryCheck",
+    "ReviewBoundaryKind",
+    "ReviewCriterionAssessment",
+    "ReviewCriterionStatus",
+    "ReviewFinding",
+    "ReviewReport",
+    "ReviewSeverity",
+    "ReviewTerminationReason",
+    "ReviewToolEvidenceReference",
+    "ReviewVerdict",
+    "RuntimeRejectionEvidence",
+    "RuntimeToolRejection",
+    "SecurityAssessment",
+    "SecuritySurfaceAssessment",
+    "TaskBrief",
+    "TestReport",
+    "WorkResult",
+    # Validation & Helper Functions
+    "_require_clean_unique_items",
+    "_require_safe_relative_path",
+    "_require_utc",
+    "_validate_specialized_assessment_scope",
+    "collect_unresolved_review_findings",
+    "parse_phase_artifact",
+    "resolve_acceptance_results",
+    "review_boundary_definition_map",
+    "validate_artifact_context",
+    "validate_tool_evidence_collection",
+]
