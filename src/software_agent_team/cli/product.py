@@ -115,7 +115,6 @@ from software_agent_team.workflow import WorkflowOutcome
 from .commands.configure import (
     _commit_configuration_transaction,
     _complete_model_metadata,
-    _load_user_configuration,
     _staged_openclaw_state,
 )
 from .commands.version import (
@@ -132,22 +131,12 @@ from .constants import (
 from .model_inspection import (
     OpenClawModelInspection,
     _bind_private_runtime_profiles,
-    _inspect_model_configuration,
-    _inspect_selected_model,
-    _validate_optional_openclaw_configuration,
 )
 from .prompts import (
     TaskResourceAuthorization,
-    _collect_task_resource_authorization,
-    _prompt_product_text,
-    _prompt_value,
-    _prompt_yes_no,
-    _read_natural_text,
-    _read_short,
 )
 from .workflow import (
     _AdaptiveWorkflowLaunchOptions,
-    _inspect_approved_plan_runtime,
 )
 
 
@@ -157,16 +146,16 @@ def _ensure_product_configuration(
     """Load or guide the first secret-free product configuration."""
 
     path = user_configuration_path()
-    current = _load_user_configuration(path)
+    current = cli._load_user_configuration(path)
     openclaw_config = state_paths.openclaw / "openclaw.json"
-    _validate_optional_openclaw_configuration(openclaw_config)
+    cli._validate_optional_openclaw_configuration(openclaw_config)
     if current is not None:
         current = _bind_private_runtime_profiles(
             current,
             config_path=openclaw_config,
         )
         try:
-            inspected = _inspect_model_configuration(
+            inspected = cli._inspect_model_configuration(
                 current,
                 state_dir=state_paths.openclaw,
                 config_path=openclaw_config,
@@ -207,7 +196,7 @@ def _ensure_product_configuration(
         candidate_state,
         candidate_config,
     ):
-        provider_setup_changed = _prompt_yes_no(
+        provider_setup_changed = cli._prompt_yes_no(
             "Open SAT's isolated OpenClaw provider setup now? "
             "Choose no only when credentials come from the current shell environment.",
             default=True,
@@ -226,7 +215,7 @@ def _ensure_product_configuration(
         if discovered_model is not None:
             print(f"✓ OpenClaw default model detected: {discovered_model}")
         default_model = current.model if current is not None else discovered_model
-        model = _prompt_value(
+        model = cli._prompt_value(
             "OpenClaw model reference (provider/model)",
             default_model,
         )
@@ -245,7 +234,7 @@ def _ensure_product_configuration(
             config_path=candidate_config,
             refresh_private_configuration=provider_setup_changed,
         )
-        inspections = _inspect_model_configuration(
+        inspections = cli._inspect_model_configuration(
             configuration,
             state_dir=candidate_state,
             config_path=candidate_config,
@@ -262,7 +251,7 @@ def _ensure_product_configuration(
             staged_openclaw_state=(candidate_state if provider_setup_changed else None),
         )
     print(f"✓ Saved secret-free model configuration to {path}")
-    if _prompt_yes_no(
+    if cli._prompt_yes_no(
         "Run one minimal provider check now? This may incur provider usage.",
         default=False,
     ):
@@ -287,7 +276,7 @@ def _collect_product_request(
     """Collect the direct inputs and authorization required before Planning."""
 
     print("\nWhat would you like to build?")
-    source_request = _prompt_product_text(
+    source_request = cli._prompt_product_text(
         "> ",
         label="software request",
         required=True,
@@ -297,7 +286,7 @@ def _collect_product_request(
     print("\nCurrent execution profile")
     for item in execution_profile:
         print(f"  {item}")
-    if not _prompt_yes_no(
+    if not cli._prompt_yes_no(
         "Build your request with this execution profile?",
         default=True,
     ):
@@ -307,7 +296,7 @@ def _collect_product_request(
         return None
 
     while True:
-        project_name = _prompt_product_text(
+        project_name = cli._prompt_product_text(
             "Project directory [software-project]: ",
             label="project directory",
             multiline=False,
@@ -333,10 +322,10 @@ def _collect_product_request(
     print("  No execution Agent is created until you approve the full overview.")
     print("  Multiple model requests may be made and may incur provider usage.")
     print("  SAT cannot determine your organization's model or Docker policy.")
-    resource_authorization = _collect_task_resource_authorization(configuration)
+    resource_authorization = cli._collect_task_resource_authorization(configuration)
     if resource_authorization is None:
         return None
-    if not _prompt_yes_no(
+    if not cli._prompt_yes_no(
         "Start model-backed Planning for this request?",
         default=False,
     ):
@@ -577,8 +566,8 @@ def _run_product_planning(
             approved = cli.run_interactive_planning(
                 coordinator,
                 request,
-                read=_read_short,
-                read_text=_read_natural_text,
+                read=cli._read_short,
+                read_text=cli._read_natural_text,
                 output=sys.stdout,
                 progress_visibility=configuration.progress_visibility,
                 progress_display=configuration.progress_display,
@@ -800,7 +789,7 @@ def _plan_execution_checkpoint(
     preflight: RuntimePreflight | None = None
     error_text: str | None = None
     try:
-        preflight = _inspect_approved_plan_runtime(
+        preflight = cli._inspect_approved_plan_runtime(
             team_plan=approved.team_plan,
             source_repository=DEFAULT_PRODUCT_SEED,
             state_paths=state_paths,
@@ -857,7 +846,7 @@ def _run_product(
         DEFAULT_PRODUCT_POLICY,
         DEFAULT_PRODUCT_PROFILE,
     )
-    saved_configuration = _load_user_configuration(user_configuration_path())
+    saved_configuration = cli._load_user_configuration(user_configuration_path())
     startup_visibility = (
         progress_visibility
         if progress_visibility is not None
@@ -941,7 +930,7 @@ def _run_product(
     )
     while not admission_report.ready:
         print("\nSAT did not start Planning because required self-checks failed.")
-        if not _prompt_yes_no(
+        if not cli._prompt_yes_no(
             "Apply the listed actions, then recheck this task now?",
             default=True,
         ):
@@ -1026,7 +1015,7 @@ def _run_product(
                     "\nSAT did not create runtime Agents or a workspace because "
                     "required self-checks failed."
                 )
-                if not _prompt_yes_no(
+                if not cli._prompt_yes_no(
                     "Apply the listed actions, then recheck the approved plan now?",
                     default=True,
                 ):
@@ -1172,7 +1161,7 @@ def _run_product(
                     "\nReplacement Planning did not start because a refreshed "
                     "self-check failed."
                 )
-                if not _prompt_yes_no(
+                if not cli._prompt_yes_no(
                     "Apply the listed actions, then recheck this replacement task?",
                     default=True,
                 ):
@@ -1186,7 +1175,7 @@ def _run_product(
                     required_pids=quality.policy.limits.pids,
                 )
                 refreshed_inspections = tuple(
-                    _inspect_selected_model(
+                    cli._inspect_selected_model(
                         DEFAULT_OPENCLAW_BINARY,
                         profile,
                         state_dir=state_paths.openclaw,

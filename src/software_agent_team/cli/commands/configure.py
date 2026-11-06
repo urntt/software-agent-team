@@ -23,15 +23,8 @@ from software_agent_team.cli.constants import (
 )
 from software_agent_team.cli.model_inspection import (
     _bind_private_runtime_profiles,
-    _inspect_model_configuration,
     _merge_discovered_model_metadata,
     _validate_optional_openclaw_configuration,
-)
-from software_agent_team.cli.prompts import (
-    _prompt_context_window,
-    _prompt_nonnegative_decimal,
-    _prompt_value,
-    _prompt_yes_no,
 )
 from software_agent_team.managed_install import is_retired_managed_application
 from software_agent_team.model_costs import CachePricing
@@ -223,7 +216,7 @@ def _complete_model_metadata(
             )
         else:
             print("  Context: not available from the runtime catalog")
-            context = _prompt_context_window(profile.model)
+            context = cli._prompt_context_window(profile.model)
             updates.update(
                 context_window_tokens=context,
                 context_source=ModelMetadataSource.USER_SUPPLIED,
@@ -251,7 +244,7 @@ def _complete_model_metadata(
                 "  Discovered price: "
                 f"${input_price} input / ${output_price} output per million tokens"
             )
-            change_prices = offer_price_change and not _prompt_yes_no(
+            change_prices = offer_price_change and not cli._prompt_yes_no(
                 "Use the runtime-catalog prices for this model?",
                 default=True,
             )
@@ -276,7 +269,7 @@ def _complete_model_metadata(
                 f"${input_price} input / ${output_price} output per million tokens "
                 f"({profile.pricing_source.value})"
             )
-            change_prices = offer_price_change and _prompt_yes_no(
+            change_prices = offer_price_change and cli._prompt_yes_no(
                 "Change these saved prices?",
                 default=False,
             )
@@ -290,10 +283,10 @@ def _complete_model_metadata(
         else:
             print("  Price: not available from the runtime catalog")
 
-        input_price = _prompt_nonnegative_decimal(
+        input_price = cli._prompt_nonnegative_decimal(
             "Input price per million tokens (USD)"
         )
-        output_price = _prompt_nonnegative_decimal(
+        output_price = cli._prompt_nonnegative_decimal(
             "Output price per million tokens (USD)"
         )
         source = (
@@ -301,7 +294,7 @@ def _complete_model_metadata(
             if input_price == 0 and output_price == 0
             else ModelMetadataSource.USER_SUPPLIED
         )
-        if source is ModelMetadataSource.CONFIRMED_ZERO and not _prompt_yes_no(
+        if source is ModelMetadataSource.CONFIRMED_ZERO and not cli._prompt_yes_no(
             "Confirm that this model route costs $0 for both input and output?",
             default=False,
         ):
@@ -336,7 +329,7 @@ def _complete_model_metadata(
                 f"${cache_prices.write_cost_per_million_usd} write per million tokens "
                 f"({cache_prices.source.value})"
             )
-            change = offer_price_change and _prompt_yes_no(
+            change = offer_price_change and cli._prompt_yes_no(
                 "Change these cache prices?",
                 default=False,
             )
@@ -347,16 +340,16 @@ def _complete_model_metadata(
             )
             change = True
         if change:
-            read_price = _prompt_nonnegative_decimal(
+            read_price = cli._prompt_nonnegative_decimal(
                 "Cache read input price per million tokens (USD)"
             )
-            write_price = _prompt_nonnegative_decimal(
+            write_price = cli._prompt_nonnegative_decimal(
                 "Cache write input price per million tokens "
                 "(USD; 0 if not separately billed)"
             )
             source = ModelMetadataSource.USER_SUPPLIED
             if read_price == 0 and write_price == 0:
-                if not _prompt_yes_no(
+                if not cli._prompt_yes_no(
                     "Confirm that both cache input buckets cost $0?", default=False
                 ):
                     raise RuntimeConfigurationError(
@@ -895,7 +888,7 @@ def _configure(args: argparse.Namespace) -> int:
         if interactive:
             print("SAT uses its own isolated OpenClaw runtime and provider state.")
             print("Existing OpenClaw installations and configuration are never used.")
-            provider_setup_changed = _prompt_yes_no(
+            provider_setup_changed = cli._prompt_yes_no(
                 "Open SAT's isolated OpenClaw provider setup now?",
                 default=not openclaw_config.is_file(),
             )
@@ -914,7 +907,7 @@ def _configure(args: argparse.Namespace) -> int:
                 print(f"OpenClaw default model detected: {discovered_model}")
             print("Press Enter to keep a value shown in brackets.")
             default_model = current.model if current is not None else discovered_model
-            model = _prompt_value("OpenClaw model reference", default_model)
+            model = cli._prompt_value("OpenClaw model reference", default_model)
             same_model = current is not None and model == current.model
             input_cost = current.input_cost_per_million_usd if same_model else None
             output_cost = current.output_cost_per_million_usd if same_model else None
@@ -1008,7 +1001,7 @@ def _configure(args: argparse.Namespace) -> int:
             config_path=candidate_config,
             refresh_private_configuration=provider_setup_changed,
         )
-        inspections = _inspect_model_configuration(
+        inspections = cli._inspect_model_configuration(
             configuration,
             state_dir=candidate_state,
             config_path=candidate_config,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -107,12 +108,34 @@ def _prompt_task_cost_ceiling() -> Decimal:
         print("Enter a finite non-negative USD amount.")
 
 
+def _route_prompt_yes_no(label: str, *, default: bool) -> bool:
+    """Resolve `_prompt_yes_no` dynamically through the `cli` facade."""
+    cli_mod = sys.modules.get("software_agent_team.cli")
+    target = (
+        getattr(cli_mod, "_prompt_yes_no", _prompt_yes_no)
+        if cli_mod is not None
+        else _prompt_yes_no
+    )
+    return target(label, default=default)
+
+
+def _route_prompt_task_cost_ceiling() -> Decimal:
+    """Resolve `_prompt_task_cost_ceiling` dynamically through `cli` facade."""
+    cli_mod = sys.modules.get("software_agent_team.cli")
+    target = (
+        getattr(cli_mod, "_prompt_task_cost_ceiling", _prompt_task_cost_ceiling)
+        if cli_mod is not None
+        else _prompt_task_cost_ceiling
+    )
+    return target()
+
+
 def _prompt_optional_run_deadline() -> int | None:
     """Ask whether a real whole-run deadline exists; default to none."""
 
     print("\nWhole-run deadline")
     print("  No deadline is recommended unless you have an actual time limit.")
-    if not _prompt_yes_no("Set a deadline for this task?", default=False):
+    if not _route_prompt_yes_no("Set a deadline for this task?", default=False):
         return None
     while True:
         raw = _read_short("Maximum whole-run time in minutes [120]: ").strip() or "120"
@@ -168,7 +191,7 @@ def _collect_task_resource_authorization(
                 cache_pricing=profile.cache_pricing,
             )
         )
-    maximum_cost = _prompt_task_cost_ceiling()
+    maximum_cost = _route_prompt_task_cost_ceiling()
     deadline = _prompt_optional_run_deadline()
     print("\nTask resource authorization")
     print(f"  Total model-spend ceiling: ${maximum_cost}")
@@ -180,7 +203,7 @@ def _collect_task_resource_authorization(
     print("  not separate limits for this ordinary product task.")
     print("  SAT stops new calls after recorded estimated spend reaches this ceiling;")
     print("  an absolute billing cap requires a provider-side spending or quota limit.")
-    if not _prompt_yes_no(
+    if not _route_prompt_yes_no(
         "Authorize these model routes and task limits?",
         default=False,
     ):

@@ -4334,3 +4334,168 @@ def test_cli_run_rejects_changes_to_frozen_benchmark(
         == 1
     )
     assert "permits only run_id" in capsys.readouterr().out
+
+
+def test_cli_facade_monkeypatch_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_yes_no(label: str, *, default: bool) -> bool:
+        calls.append(f"yes_no:{label}")
+        return False
+
+    def fake_value(label: str, current: object | None = None) -> str:
+        calls.append(f"value:{label}")
+        return "mocked-result"
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
+    monkeypatch.setattr(cli, "_prompt_value", fake_value)
+
+    # 1. Test prompts module dynamic routing through cli
+    from software_agent_team.cli.prompts import _prompt_optional_run_deadline
+
+    assert _prompt_optional_run_deadline() is None
+    assert any("Set a deadline for this task?" in c for c in calls)
+
+    # 2. Test cli._prompt_value direct delegation
+    val = cli._prompt_value("Enter key", "default")
+    assert val == "mocked-result"
+    assert any("Enter key" in c for c in calls)
+
+    # 3. Test cli.product module dynamic routing via monkeypatched facade
+    def fake_product_text(prompt: str, **kwargs: object) -> str:
+        calls.append(f"product_text:{prompt}")
+        return "mocked text"
+
+    monkeypatch.setattr(cli, "_prompt_product_text", fake_product_text)
+    from software_agent_team.user_configuration import UserConfiguration
+
+    config = UserConfiguration(model="provider/test-model")
+    res = cli._collect_product_request(
+        working_directory=tmp_path,
+        run_id="test-run",
+        configuration=config,
+        execution_profile=("Profile 1",),
+        base_constraints=(),
+    )
+    # fake_yes_no returns False, so user declined to build with profile -> returns None
+    assert res is None
+    assert any("Build your request with this execution profile?" in c for c in calls)
+    assert any("product_text:> " in c for c in calls)
+
+    # 4. Test cli.commands.validation module dynamic routing via monkeypatched facade
+    import argparse
+    from unittest.mock import MagicMock
+
+    from software_agent_team.cli.commands.validation import _cleanup_owned_resources
+
+    dummy_args = argparse.Namespace(yes=False, orphans=True)
+    mock_store = MagicMock()
+    mock_obs = MagicMock()
+    mock_obs.orphaned = (MagicMock(),)
+    mock_obs.stale = ()
+    mock_obs.processes = ()
+    mock_obs.active = ()
+    mock_store.inspect.return_value = mock_obs
+    monkeypatch.setattr(
+        "software_agent_team.cli.commands.validation.ProcessLeaseStore",
+        lambda *a, **kw: mock_store,
+    )
+    rc = _cleanup_owned_resources(dummy_args)
+    assert rc == 0
+    assert any(
+        "Stop the proven orphaned process groups and their SAT sandboxes?" in c
+        for c in calls
+    )
+
+    # 5. Test cli.commands.version module dynamic routing via monkeypatched facade
+    from software_agent_team.cli.commands.version import _apply_managed_change
+
+    mock_plan = MagicMock()
+    mock_plan.requires_activation = True
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    rc_ver = _apply_managed_change(
+        plan=mock_plan,
+        target=MagicMock(),
+        paths=MagicMock(),
+        assume_yes=False,
+    )
+    assert rc_ver == 0
+    assert any("Stage, verify, and activate this target?" in c for c in calls)
+
+    # 6. Test cli.commands.configure module dynamic routing via monkeypatched facade
+    from decimal import Decimal
+
+    from software_agent_team.cli.commands.configure import _complete_model_metadata
+    from software_agent_team.model_costs import CachePricing
+    from software_agent_team.model_metadata import ModelMetadataSource
+    from software_agent_team.model_routing import ModelProfile
+    from software_agent_team.runtime_configuration import OpenClawModelInspection
+
+    def fake_nonnegative_decimal(label: str) -> Decimal:
+        calls.append(f"decimal:{label}")
+        return Decimal("0.0")
+
+    monkeypatch.setattr(cli, "_prompt_nonnegative_decimal", fake_nonnegative_decimal)
+    test_profile = ModelProfile(
+        id="default",
+        model="provider/test-model",
+        capabilities=tuple(AgentCapability),
+        input_cost_per_million_usd=1.0,
+        output_cost_per_million_usd=2.0,
+        pricing_source="user_supplied",
+        context_window_tokens=8192,
+        context_source="user_supplied",
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=0.1,
+            write_cost_per_million_usd=0.2,
+            source=ModelMetadataSource.USER_SUPPLIED,
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    test_config = UserConfiguration(
+        model_profiles=(test_profile,),
+    )
+    test_inspection = OpenClawModelInspection(
+        model="provider/test-model",
+        available=True,
+    )
+    # fake_yes_no will be called for "Change these saved prices?"
+    # and "Change these cache prices?"
+    _complete_model_metadata(test_config, (test_inspection,), offer_price_change=True)
+    assert any("Change these saved prices?" in c for c in calls)
+    assert any("Change these cache prices?" in c for c in calls)
+
+    # 7. Test cli._prompt_context_window dynamic delegation
+    def fake_context_window(model: str) -> int:
+        calls.append(f"context:{model}")
+        return 16384
+
+    monkeypatch.setattr(cli, "_prompt_context_window", fake_context_window)
+    test_profile_no_ctx = ModelProfile(
+        id="default",
+        model="provider/no-context-model",
+        capabilities=tuple(AgentCapability),
+        input_cost_per_million_usd=1.0,
+        output_cost_per_million_usd=2.0,
+        pricing_source="user_supplied",
+        context_window_tokens=None,
+        context_source=None,
+        cache_pricing=CachePricing(
+            read_cost_per_million_usd=0.1,
+            write_cost_per_million_usd=0.2,
+            source=ModelMetadataSource.USER_SUPPLIED,
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    test_config2 = UserConfiguration(model_profiles=(test_profile_no_ctx,))
+    test_inspection2 = OpenClawModelInspection(
+        model="provider/no-context-model",
+        available=True,
+    )
+    _complete_model_metadata(
+        test_config2, (test_inspection2,), offer_price_change=False
+    )
+    assert any("context:provider/no-context-model" in c for c in calls)

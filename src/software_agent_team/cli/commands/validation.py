@@ -22,7 +22,6 @@ from software_agent_team.cli.constants import (
     DEFAULT_OPENCLAW_CONFIG,
     PROJECT_ROOT,
 )
-from software_agent_team.cli.prompts import _prompt_yes_no
 from software_agent_team.configuration import validate_environment_configuration
 from software_agent_team.decision_limits import validate_decision_limit_registry
 from software_agent_team.git_workspace import GitWorkspaceManager
@@ -142,7 +141,7 @@ def _cleanup_owned_resources(args: argparse.Namespace) -> int:
     if not candidates:
         print("No orphaned process or stale lease requires cleanup.")
         return 0
-    if not args.yes and not _prompt_yes_no(
+    if not args.yes and not cli._prompt_yes_no(
         "Stop the proven orphaned process groups and their SAT sandboxes?",
         default=False,
     ):

@@ -11,7 +11,6 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from software_agent_team.cli.constants import PROJECT_ROOT
-from software_agent_team.cli.prompts import _prompt_yes_no
 from software_agent_team.managed_install import (
     ManagedChannel,
     ManagedInstallPaths,
@@ -198,7 +197,7 @@ def _apply_managed_change(
     if not assume_yes:
         if not sys.stdin.isatty():
             raise ValueError("interactive confirmation is required; use --yes")
-        if not _prompt_yes_no(
+        if not cli._prompt_yes_no(
             "Stage, verify, and activate this target?", default=False
         ):
             print("Managed application change cancelled.")
