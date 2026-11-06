@@ -2,21 +2,74 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "MINIMUM_READABLE_PLANNING_SCHEMA_VERSION",
+    "PLANNING_SCHEMA_VERSION",
+    "AdaptiveImplementationPlan",
+    "AdaptivePlanningCoordinator",
+    "AgentTimeoutResolution",
+    "AgentWorkload",
+    "ApprovedPlanningResult",
+    "CapabilityTimeoutPolicy",
+    "InputReader",
+    "OutputWriter",
+    "PlanningActivity",
+    "PlanningActivityKind",
+    "PlanningApproval",
+    "PlanningDecisionAuthority",
+    "PlanningDecisionCategory",
+    "PlanningDecisionProvenance",
+    "PlanningDecisionProvenanceKind",
+    "PlanningDecisionRecord",
+    "PlanningError",
+    "PlanningIntegrityError",
+    "PlanningModelResponse",
+    "PlanningOption",
+    "PlanningOptionValue",
+    "PlanningPolicy",
+    "PlanningPreview",
+    "PlanningProposal",
+    "PlanningProposalBody",
+    "PlanningProposalSource",
+    "PlanningQuestion",
+    "PlanningQuestionAnswer",
+    "PlanningQuestionOrigin",
+    "PlanningRecoveryAction",
+    "PlanningRequest",
+    "PlanningResponseKind",
+    "PlanningRouteRuntime",
+    "PlanningSessionStatus",
+    "PlanningStore",
+    "PlanningTurn",
+    "PresentedPlanningQuestion",
+    "ProposedAgent",
+    "ProposedCriterion",
+    "ProposedRequirement",
+    "ProposedTask",
+    "StructuredEditKind",
+    "StructuredPlanEdit",
+    "TerminalPlanningProgress",
+    "_run_interactive_planning",
+    "apply_structured_edit",
+    "compile_approved_review_scopes",
+    "preview_adaptive_proposal",
+    "render_planning_overview",
+    "run_interactive_planning",
+    "validate_task_agent_bindings",
+    "validate_task_criterion_references",
+    "validate_writer_task_scope_forecasts",
+]
+
 import hashlib
 import json
 import os
 import re
-import sys
-import threading
-import time
-import unicodedata
 from collections.abc import Callable, Collection, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from string import Template
 from typing import Literal, Self, TextIO
@@ -31,7 +84,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from wcwidth import wcswidth
 
 from software_agent_team.artifacts import (
     AcceptanceCriterion,
@@ -45,7 +97,6 @@ from software_agent_team.artifacts import (
     ProductDefinitionDisposition,
     ProductDefinitionStatement,
     ProviderLivenessEvidence,
-    ReviewBoundaryKind,
     RuntimeRejectionEvidence,
     TaskBrief,
     review_boundary_definition_map,
@@ -67,16 +118,11 @@ from software_agent_team.execution import (
     AgentExecutionResult,
     AgentExecutionStatus,
     AgentExecutor,
-    AgentToolActionClass,
-    AgentToolTargetClass,
     execution_exception_result,
 )
 from software_agent_team.integrity import canonical_model_sha256
 from software_agent_team.invocation_lifecycle import (
-    InitializationCheckpoint,
     InvocationLifecycleEvidence,
-    InvocationPhase,
-    InvocationStopReason,
 )
 from software_agent_team.model_costs import CacheTokenUsage
 from software_agent_team.model_metadata import ModelMetadataSource
@@ -91,6 +137,75 @@ from software_agent_team.model_runtime import (
     openclaw_invocation_thinking_level,
     runtime_profile_for_model,
 )
+from software_agent_team.planning.common import (
+    MAX_PLANNING_DECISION_SUMMARY_CHARACTERS,
+    MAX_PLANNING_EVIDENCE_CHARACTERS,
+    MAX_RESPONSE_NORMALIZATION_CHARACTERS,
+    MAX_RESPONSE_NORMALIZATIONS,
+    MINIMUM_READABLE_PLANNING_SCHEMA_VERSION,
+    PLANNING_SCHEMA_VERSION,
+    _clean_text,
+    _clean_unique,
+    _render_prefixed_text,
+    _utc,
+)
+from software_agent_team.planning.entities import (
+    ProposedAgent,
+    ProposedAssumption,
+    ProposedCriterion,
+    ProposedRequirement,
+    ProposedTask,
+)
+from software_agent_team.planning.invariants import (
+    _USER_DECISION_PRODUCT_DIMENSIONS,
+    PlanningError,
+    PlanningIntegrityError,
+    _planning_context_invariant,
+    _planning_model_invariant,
+    _planning_subjects,
+    _planning_user_decision_invariant,
+    _PlanningClarificationRecovery,
+    _PlanningContextInvariantError,
+    _PlanningContextInvariantsError,
+    _PlanningInvariant,
+    _PlanningModelInvariantError,
+)
+from software_agent_team.planning.models_basic import (
+    _DECISION_AUTHORITY,
+    _DECISION_PROVENANCE_AUTHORITY,
+    _PRODUCT_DIMENSION_DECISION_CATEGORY,
+    AgentWorkload,
+    PlanningActivity,
+    PlanningActivityHandler,
+    PlanningActivityKind,
+    PlanningDecisionAuthority,
+    PlanningDecisionCategory,
+    PlanningDecisionProvenance,
+    PlanningDecisionProvenanceKind,
+    PlanningProposalSource,
+    PlanningQuestionOrigin,
+    PlanningRecoveryAction,
+    PlanningResponseKind,
+    PlanningSessionStatus,
+    StructuredEditKind,
+)
+from software_agent_team.planning.presentation import (
+    TerminalPlanningProgress,
+)
+from software_agent_team.planning.questions import (
+    _ALL_REVIEW_BOUNDARIES,
+    PLANNING_OPTION_DESCRIPTION_MAX_LENGTH,
+    PlanningDecisionRecord,
+    PlanningOption,
+    PlanningOptionValue,
+    PlanningQuestion,
+    PlanningQuestionAdmission,
+    PlanningQuestionAnswer,
+    PlanningRequest,
+    PresentedPlanningQuestion,
+    _PlanningQuestionContract,
+    _requires_full_review_boundaries,
+)
 from software_agent_team.planning_normalization import (
     canonicalize_model_path,
     normalize_response_envelope,
@@ -100,8 +215,6 @@ from software_agent_team.progress import (
     RunEventVisibility,
     TerminalColorMode,
     TerminalProgressDisplay,
-    terminal_color_enabled,
-    terminal_presentation_capable,
 )
 from software_agent_team.response_corrections import (
     MAX_CORRECTION_FIELDS,
@@ -155,21 +268,12 @@ from software_agent_team.teams import (
     PlanApprovalSource,
     TeamPlan,
     TeamPlanOrigin,
-    default_specialization_for_capability,
     expected_output_for_specialization,
     permission_for_capability,
     specialization_contract,
     workspace_scopes_overlap,
 )
-from software_agent_team.terminal_dashboard import TerminalDashboard
 from software_agent_team.terminal_metrics import TerminalRunMetrics
-from software_agent_team.terminal_presentation import (
-    InvocationPresentation,
-    colorize_metrics,
-)
-
-PLANNING_SCHEMA_VERSION = 23
-MINIMUM_READABLE_PLANNING_SCHEMA_VERSION = 2
 
 # One invocation may fail to produce any attributable typed submission even after
 # the provider streamed output: the submission tool was never called, or its
@@ -191,80 +295,6 @@ _TEMPLATE_PARENT = (
     else Path(__file__).parent
 )
 PLANNING_TEMPLATE = _TEMPLATE_PARENT / "prompt_templates" / "adaptive_planner.md"
-from software_agent_team.planning.common import (
-    MAX_PLANNING_DECISION_SUMMARY_CHARACTERS,
-    MAX_PLANNING_EVIDENCE_CHARACTERS,
-    MAX_RESPONSE_NORMALIZATION_CHARACTERS,
-    MAX_RESPONSE_NORMALIZATIONS,
-    PLANNING_OPTION_DESCRIPTION_MAX_LENGTH,
-    PLANNING_SCHEMA_VERSION,
-    MINIMUM_READABLE_PLANNING_SCHEMA_VERSION,
-    _clean_text,
-    _clean_unique,
-    _render_prefixed_text,
-    _safe_path,
-    _utc,
-)
-from software_agent_team.planning.invariants import (
-    PlanningError,
-    PlanningIntegrityError,
-    _PlanningClarificationRecovery,
-    _PlanningContextInvariantError,
-    _PlanningContextInvariantsError,
-    _PlanningInvariant,
-    _PlanningModelInvariantError,
-    _planning_context_invariant,
-    _planning_model_invariant,
-    _planning_subjects,
-    _planning_user_decision_invariant,
-    _USER_DECISION_PRODUCT_DIMENSIONS,
-)
-from software_agent_team.planning.models_basic import (
-    AgentWorkload,
-    PlanningActivity,
-    PlanningActivityHandler,
-    PlanningActivityKind,
-    PlanningDecisionAuthority,
-    PlanningDecisionCategory,
-    PlanningDecisionProvenance,
-    PlanningDecisionProvenanceKind,
-    PlanningProposalSource,
-    PlanningQuestionOrigin,
-    PlanningRecoveryAction,
-    PlanningResponseKind,
-    PlanningSessionStatus,
-    StructuredEditKind,
-    _DECISION_AUTHORITY,
-    _DECISION_PROVENANCE_AUTHORITY,
-    _PRODUCT_DIMENSION_DECISION_CATEGORY,
-)
-from software_agent_team.planning.presentation import (
-    TerminalPlanningProgress,
-    _PlanningProgressObservation,
-)
-from software_agent_team.planning.entities import (
-    ProposedAgent,
-    ProposedAssumption,
-    ProposedCriterion,
-    ProposedRequirement,
-    ProposedTask,
-)
-from software_agent_team.planning.questions import (
-    PlanningDecisionRecord,
-    PlanningOption,
-    PlanningOptionValue,
-    PlanningQuestion,
-    PlanningQuestionAdmission,
-    PlanningQuestionAnswer,
-    PlanningRequest,
-    PresentedPlanningQuestion,
-    _ABSOLUTE_GUARANTEE_PATTERN,
-    _ALL_REVIEW_BOUNDARIES,
-    _PlanningQuestionContract,
-    _requires_full_review_boundaries,
-)
-
-
 
 
 def _compile_task_dependency_projection(
@@ -2949,9 +2979,6 @@ def _planning_validation_diagnostic(
         )
         return diagnostic.model_copy(update={"correction_paths": correction_paths})
     return diagnostic
-
-
-
 
 
 def validate_writer_task_scope_forecasts(

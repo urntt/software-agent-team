@@ -283,4 +283,3 @@ class PlanningActivity:
 
 
 PlanningActivityHandler = Callable[[PlanningActivity], None]
-

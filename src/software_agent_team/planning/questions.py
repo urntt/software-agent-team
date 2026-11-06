@@ -15,7 +15,6 @@ from software_agent_team.artifacts import (
 )
 from software_agent_team.planning.common import (
     MAX_PLANNING_DECISION_SUMMARY_CHARACTERS,
-    PLANNING_OPTION_DESCRIPTION_MAX_LENGTH,
     PLANNING_SCHEMA_VERSION,
     _clean_text,
     _clean_unique,
@@ -406,5 +405,3 @@ def _requires_full_review_boundaries(text: str) -> bool:
         ):
             return True
     return False
-
-

@@ -261,5 +261,3 @@ class ProposedTask(BaseModel):
     def require_safe_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         cleaned = _clean_unique(values, label="expected path")
         return tuple(_safe_path(value) for value in cleaned)
-
-

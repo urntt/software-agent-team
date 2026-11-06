@@ -729,4 +729,3 @@ class TerminalPlanningProgress:
         if stripped.startswith(("■", "…")):
             return "36"
         return "2" if value.startswith("  ") else "36"
-
