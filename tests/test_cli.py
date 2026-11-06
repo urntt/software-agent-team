@@ -3762,8 +3762,12 @@ def test_openclaw_configuration_has_no_hidden_setup_deadline(
         "model",
     ]
     assert "timeout" not in observed["kwargs"]
-    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
-    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
+    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(
+        state.resolve(strict=False)
+    )
+    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(
+        config.resolve(strict=False)
+    )
 
 
 def test_openclaw_default_model_is_discovered_without_a_provider_probe(
@@ -3803,8 +3807,12 @@ def test_openclaw_default_model_is_discovered_without_a_provider_probe(
     ]
     assert "--probe" not in observed["argv"]
     assert observed["kwargs"]["capture_output"] is True
-    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(state)
-    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(config)
+    assert observed["kwargs"]["env"]["OPENCLAW_STATE_DIR"] == str(
+        state.resolve(strict=False)
+    )
+    assert observed["kwargs"]["env"]["OPENCLAW_CONFIG_PATH"] == str(
+        config.resolve(strict=False)
+    )
 
 
 def test_product_delivery_refuses_a_changed_final_report(tmp_path: Path) -> None:
