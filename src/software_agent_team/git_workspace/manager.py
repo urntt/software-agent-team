@@ -1,0 +1,889 @@
+"""Safe isolated Git clone preparation, execution, and verification manager.
+
+Git 隔离工作区生命周期管理器。
+负责从源仓库安全克隆隔离工作区、检出分离 HEAD、执行无副作用状态验证、
+提取增量哈希摘要、审查提交快照以及安全清理。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import stat
+import subprocess
+import tempfile
+from collections.abc import Collection
+from pathlib import Path, PurePosixPath
+
+from software_agent_team.git_policy import (
+    UNSAFE_CONFIG_PATTERN,
+    git_command,
+    git_environment,
+)
+
+from .types import (
+    ATTRIBUTE_FILTER_PATTERN,
+    COMMIT_PATTERN,
+    RUN_ID_PATTERN,
+    Clock,
+    GitCommandError,
+    GitSnapshot,
+    GitWorkspace,
+    GitWorkspaceError,
+    GitWorkspaceProgress,
+    RepositoryValidationError,
+    UnsafeRepositoryError,
+    WorkspaceAlreadyExistsError,
+    WorkspaceIntegrityError,
+    _require_safe_repository_path,
+    _require_utc,
+    _system_clock,
+)
+
+
+class GitWorkspaceManager:
+    """Prepare detached standalone clones and verify Agent-created commits.
+
+    隔离工作区管理器。
+    负责分配与初始化无远端的完全独立工作区; 提供无执行风险的 Git 子进程控制,
+    严格核验提交哈希历史与工作树清洁度。
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        clock: Clock = _system_clock,
+        git_binary: str = "git",
+        timeout_seconds: int = 30,
+    ) -> None:
+        if timeout_seconds < 1:
+            raise GitWorkspaceError("Git command timeout must be positive")
+        self.root = root
+        self.clock = clock
+        self.git_binary = git_binary
+        self.timeout_seconds = timeout_seconds
+
+    def prepare(
+        self,
+        run_id: str,
+        *,
+        source_repository: Path,
+        base_ref: str = "HEAD",
+    ) -> GitWorkspace:
+        """Create one detached standalone clone from a validated repository.
+
+        从经验证的源仓库创建单个处于分离 HEAD 状态的自包含工作区克隆。
+        """
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            raise GitWorkspaceError(f"invalid run ID: {run_id}")
+        source, base_commit, author_name, author_email = (
+            self._validated_source_repository(source_repository, base_ref=base_ref)
+        )
+
+        candidate_root = self.root.resolve(strict=False)
+        if candidate_root == source or candidate_root.is_relative_to(source):
+            raise GitWorkspaceError(
+                "workspace root must be outside the source repository"
+            )
+        self.root.mkdir(parents=True, exist_ok=True)
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise GitWorkspaceError("workspace root must be a real directory")
+        root = self.root.resolve(strict=True)
+        destination = root / run_id
+        if destination.exists() or destination.is_symlink():
+            raise WorkspaceAlreadyExistsError(
+                f"workspace path already exists: {destination}"
+            )
+
+        self._git(
+            source,
+            [
+                "clone",
+                "--no-local",
+                "--no-checkout",
+                "--",
+                str(source),
+                str(destination),
+            ],
+        )
+        self._git(destination, ["remote", "remove", "origin"])
+        self._git(destination, ["config", "--local", "user.name", author_name])
+        self._git(destination, ["config", "--local", "user.email", author_email])
+        self._git(destination, ["checkout", "--detach", base_commit])
+        workspace = GitWorkspace(
+            run_id=run_id,
+            source_repository=str(source),
+            workspace_path=str(destination),
+            base_commit=base_commit,
+            created_at=_require_utc(self.clock()),
+        )
+        self.verify_workspace(
+            workspace, expected_commit=base_commit, require_clean=True
+        )
+        return workspace
+
+    def validate_source_repository(
+        self,
+        source_repository: Path,
+        *,
+        base_ref: str = "HEAD",
+    ) -> str:
+        """Validate every source precondition without creating a workspace.
+
+        在不创建工作区的情况下校验源仓库的所有前置安全条件并返回基线提交。
+        """
+        _, base_commit, _, _ = self._validated_source_repository(
+            source_repository,
+            base_ref=base_ref,
+        )
+        return base_commit
+
+    def verify_workspace(
+        self,
+        workspace: GitWorkspace,
+        *,
+        expected_commit: str | None = None,
+        require_clean: bool = False,
+    ) -> str:
+        """Verify standalone clone identity, state, commit, and cleanliness.
+
+        严格验证独立克隆工作区的身份、自包含元数据、分离 HEAD 状态与工作区清洁度。
+        """
+        try:
+            source = self._validate_source(Path(workspace.source_repository))
+        except GitWorkspaceError as error:
+            raise WorkspaceIntegrityError("source repository is missing") from error
+        run_workspace = Path(workspace.workspace_path)
+        if not run_workspace.is_dir() or run_workspace.is_symlink():
+            raise WorkspaceIntegrityError("isolated workspace is missing")
+
+        top_level = Path(
+            self._git_text(run_workspace, ["rev-parse", "--show-toplevel"])
+        ).resolve(strict=True)
+        resolved_workspace = run_workspace.resolve(strict=True)
+        if top_level != resolved_workspace:
+            raise WorkspaceIntegrityError("workspace top level does not match metadata")
+
+        git_directory = run_workspace / ".git"
+        if not git_directory.is_dir() or git_directory.is_symlink():
+            raise WorkspaceIntegrityError(
+                "workspace Git metadata must be a self-contained directory"
+            )
+        resolved_git_directory = git_directory.resolve(strict=True)
+        reported_git_directory = self._resolved_git_path(
+            run_workspace,
+            self._git_text(run_workspace, ["rev-parse", "--absolute-git-dir"]),
+        )
+        common_directory = self._resolved_git_path(
+            run_workspace,
+            self._git_text(run_workspace, ["rev-parse", "--git-common-dir"]),
+        )
+        if (
+            reported_git_directory != resolved_git_directory
+            or common_directory != resolved_git_directory
+        ):
+            raise WorkspaceIntegrityError(
+                "workspace Git metadata is not self-contained"
+            )
+        if (git_directory / "objects" / "info" / "alternates").exists():
+            raise WorkspaceIntegrityError(
+                "workspace object database cannot use an external alternate"
+            )
+        if self._git_text(run_workspace, ["remote"]):
+            raise WorkspaceIntegrityError("isolated workspace cannot retain a remote")
+        try:
+            source_base = self._resolve_commit(source, workspace.base_commit)
+        except GitWorkspaceError as error:
+            raise WorkspaceIntegrityError(
+                "workspace base commit is absent from the recorded source"
+            ) from error
+        if source_base != workspace.base_commit:
+            raise WorkspaceIntegrityError(
+                "workspace belongs to a different source history"
+            )
+
+        symbolic = self._git(
+            run_workspace,
+            ["symbolic-ref", "-q", "HEAD"],
+            allowed_returncodes={0, 1},
+        )
+        if symbolic.returncode == 0:
+            raise WorkspaceIntegrityError("run workspace must remain detached")
+
+        head = self._resolve_commit(run_workspace, "HEAD")
+        if expected_commit is not None and head != expected_commit:
+            raise WorkspaceIntegrityError(
+                f"workspace HEAD does not match expected commit {expected_commit}"
+            )
+        self._validate_checkout_safety(run_workspace, head)
+        self._validate_working_tree_attributes(run_workspace)
+        if require_clean and self._status(run_workspace):
+            raise WorkspaceIntegrityError("workspace contains uncommitted changes")
+        return head
+
+    def inspect_progress(
+        self,
+        workspace: GitWorkspace,
+        *,
+        input_commit: str,
+    ) -> GitWorkspaceProgress:
+        """Verify and digest a possibly dirty descendant without accepting it.
+
+        检验并提取可能包含未提交脏变更的后代工作区状态哈希摘要。
+        """
+        if not re.fullmatch(COMMIT_PATTERN, input_commit):
+            raise WorkspaceIntegrityError("workspace progress input commit is invalid")
+        run_workspace = Path(workspace.workspace_path)
+        current_commit = self.verify_workspace(workspace, require_clean=False)
+        try:
+            resolved_input = self._resolve_commit(run_workspace, input_commit)
+        except (GitCommandError, RepositoryValidationError) as error:
+            raise WorkspaceIntegrityError(
+                "workspace progress input commit is unavailable"
+            ) from error
+        if resolved_input != input_commit:
+            raise WorkspaceIntegrityError(
+                "workspace progress input commit is ambiguous"
+            )
+        ancestor = self._git(
+            run_workspace,
+            ["merge-base", "--is-ancestor", input_commit, current_commit],
+            allowed_returncodes={0, 1},
+        )
+        if ancestor.returncode != 0:
+            raise WorkspaceIntegrityError(
+                "workspace progress commit is not a descendant of its input"
+            )
+        commits_ahead = int(
+            self._git_text(
+                run_workspace,
+                ["rev-list", "--count", f"{input_commit}..{current_commit}"],
+            )
+        )
+        changed_output = self._git(
+            run_workspace,
+            ["diff", "--name-only", "-z", input_commit, "--"],
+        ).stdout
+        untracked_output = self._git(
+            run_workspace,
+            ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+        ).stdout
+        changed_files = tuple(
+            sorted(
+                set(
+                    self._decode_repository_paths(
+                        changed_output + untracked_output,
+                        label="workspace progress",
+                    )
+                )
+            )
+        )
+        status = self._git(
+            run_workspace,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ).stdout
+        has_uncommitted_changes = bool(status)
+        state = hashlib.sha256()
+        state.update(current_commit.encode("ascii"))
+        state.update(b"\0status\0")
+        state.update(hashlib.sha256(status).digest())
+        state.update(b"\0tracked-diff\0")
+        state.update(
+            bytes.fromhex(
+                self._git_output_sha256(
+                    run_workspace,
+                    [
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--binary",
+                        "--full-index",
+                        input_commit,
+                        "--",
+                    ],
+                )
+            )
+        )
+        for path in self._decode_repository_paths(
+            untracked_output,
+            label="untracked workspace progress",
+        ):
+            state.update(b"\0untracked\0")
+            state.update(path.encode("utf-8"))
+            state.update(b"\0")
+            state.update(
+                bytes.fromhex(self._untracked_path_sha256(run_workspace, path))
+            )
+        return GitWorkspaceProgress(
+            input_commit=input_commit,
+            current_commit=current_commit,
+            commits_ahead=commits_ahead,
+            changed_files=changed_files,
+            has_uncommitted_changes=has_uncommitted_changes,
+            state_sha256=state.hexdigest(),
+        )
+
+    def recover_prepared(
+        self,
+        run_id: str,
+        *,
+        source_repository: Path,
+        base_ref: str = "HEAD",
+    ) -> GitWorkspace:
+        """Explicitly recover a matching clone created before state attachment.
+
+        在崩溃或重启后显式恢复并校验此前已成功初始化的独立工作区。
+        """
+        if not RUN_ID_PATTERN.fullmatch(run_id):
+            raise GitWorkspaceError(f"invalid run ID: {run_id}")
+        source, base_commit, _, _ = self._validated_source_repository(
+            source_repository,
+            base_ref=base_ref,
+        )
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise WorkspaceIntegrityError("workspace root is unavailable for recovery")
+        root = self.root.resolve(strict=True)
+        if root == source or root.is_relative_to(source):
+            raise WorkspaceIntegrityError(
+                "workspace root must be outside the source repository"
+            )
+        workspace = GitWorkspace(
+            run_id=run_id,
+            source_repository=str(source),
+            workspace_path=str(root / run_id),
+            base_commit=base_commit,
+            created_at=_require_utc(self.clock()),
+        )
+        try:
+            self.verify_workspace(
+                workspace,
+                expected_commit=base_commit,
+                require_clean=True,
+            )
+        except GitWorkspaceError as error:
+            raise WorkspaceIntegrityError(
+                "existing workspace cannot be recovered safely"
+            ) from error
+        return workspace
+
+    def _validated_source_repository(
+        self,
+        source_repository: Path,
+        *,
+        base_ref: str,
+    ) -> tuple[Path, str, str, str]:
+        """Return one source snapshot after all preparation checks pass.
+
+        全面审查源仓库的前置完整性与安全性: 返回权威路径、基线提交及作者身份。
+        """
+        source = self._validate_source(source_repository)
+        if not base_ref:
+            raise RepositoryValidationError("base ref must not be empty")
+        base_commit = self._resolve_commit(source, base_ref)
+        self._validate_checkout_safety(source, base_commit)
+        self._validate_working_tree_attributes(source)
+        if self._status(source):
+            raise RepositoryValidationError("source repository must be clean")
+        author_name, author_email = self._source_commit_identity(source)
+        return source, base_commit, author_name, author_email
+
+    def verify_snapshot(
+        self,
+        workspace: GitWorkspace,
+        *,
+        iteration: int,
+        input_commit: str,
+    ) -> GitSnapshot:
+        """Verify and describe one clean descendant commit range.
+
+        验证并构建单次迭代生成的清洁后代提交快照契约。
+        """
+        if type(iteration) is not int or iteration < 1:
+            raise WorkspaceIntegrityError(
+                "snapshot iteration must be a positive integer"
+            )
+        if not re.fullmatch(COMMIT_PATTERN, input_commit):
+            raise WorkspaceIntegrityError("snapshot input commit is invalid")
+        run_workspace = Path(workspace.workspace_path)
+        output_commit = self.verify_workspace(workspace, require_clean=True)
+        if output_commit == input_commit:
+            raise WorkspaceIntegrityError("snapshot contains no new commit")
+        try:
+            resolved_input = self._resolve_commit(run_workspace, input_commit)
+        except (GitCommandError, RepositoryValidationError) as error:
+            raise WorkspaceIntegrityError(
+                "snapshot input commit is not available in the workspace"
+            ) from error
+        if resolved_input != input_commit:
+            raise WorkspaceIntegrityError("snapshot input commit is ambiguous")
+
+        ancestor = self._git(
+            run_workspace,
+            ["merge-base", "--is-ancestor", input_commit, output_commit],
+            allowed_returncodes={0, 1},
+        )
+        if ancestor.returncode != 0:
+            raise WorkspaceIntegrityError(
+                "snapshot output commit is not a descendant of its input"
+            )
+        commit_count = int(
+            self._git_text(
+                run_workspace,
+                ["rev-list", "--count", f"{input_commit}..{output_commit}"],
+            )
+        )
+        changed_output = self._git(
+            run_workspace,
+            ["diff", "--name-only", "-z", input_commit, output_commit, "--"],
+        ).stdout
+        try:
+            changed_files = tuple(
+                item.decode("utf-8", errors="strict")
+                for item in changed_output.split(b"\0")
+                if item
+            )
+        except UnicodeDecodeError as error:
+            raise WorkspaceIntegrityError(
+                "snapshot contains a non-UTF-8 repository path"
+            ) from error
+        if not changed_files:
+            raise WorkspaceIntegrityError("snapshot contains no changed files")
+        return GitSnapshot(
+            run_id=workspace.run_id,
+            iteration=iteration,
+            input_commit=input_commit,
+            output_commit=output_commit,
+            commit_count=commit_count,
+            changed_files=changed_files,
+            recorded_at=_require_utc(self.clock()),
+        )
+
+    def _source_commit_identity(self, source: Path) -> tuple[str, str]:
+        """Read the explicit local identity copied into the isolated clone.
+
+        读取源仓库本地配置的 user.name 与 user.email 用于注入隔离环境。
+        """
+        try:
+            name = self._git_text(source, ["config", "--local", "--get", "user.name"])
+            email = self._git_text(
+                source,
+                ["config", "--local", "--get", "user.email"],
+            )
+        except GitCommandError as error:
+            raise RepositoryValidationError(
+                "source repository requires local user.name and user.email"
+            ) from error
+        if not name or not email:
+            raise RepositoryValidationError(
+                "source repository requires local user.name and user.email"
+            )
+        return name, email
+
+    def _validate_source(self, source_repository: Path) -> Path:
+        try:
+            source = source_repository.resolve(strict=True)
+        except OSError as error:
+            raise RepositoryValidationError(
+                "source repository does not exist"
+            ) from error
+        if not source.is_dir():
+            raise RepositoryValidationError("source repository must be a directory")
+        try:
+            top_level = Path(
+                self._git_text(source, ["rev-parse", "--show-toplevel"])
+            ).resolve(strict=True)
+        except GitCommandError as error:
+            raise RepositoryValidationError(
+                "source path is not a Git working tree"
+            ) from error
+        if top_level != source:
+            raise RepositoryValidationError(
+                "source path must be the repository top level"
+            )
+        if self._git_text(source, ["rev-parse", "--is-bare-repository"]) != "false":
+            raise RepositoryValidationError("bare repositories are not supported")
+        return source
+
+    def _validate_checkout_safety(self, source: Path, commit: str) -> None:
+        unsafe_config = self._git(
+            source,
+            [
+                "config",
+                "--includes",
+                "--get-regexp",
+                UNSAFE_CONFIG_PATTERN,
+            ],
+            allowed_returncodes={0, 1},
+            controller_config=False,
+        )
+        if unsafe_config.returncode == 0 and unsafe_config.stdout.strip():
+            raise UnsafeRepositoryError(
+                "repository config contains hooks, filters, or fsmonitor"
+            )
+
+        hooks_path = (
+            self._resolved_git_path(
+                source,
+                self._git_text(source, ["rev-parse", "--git-common-dir"]),
+            )
+            / "hooks"
+        )
+        if hooks_path.is_dir() and any(
+            path.is_file()
+            and not path.name.endswith(".sample")
+            and os.access(path, os.X_OK)
+            for path in hooks_path.iterdir()
+        ):
+            raise UnsafeRepositoryError("repository contains an executable Git hook")
+
+        info_attributes = self._resolved_git_path(
+            source,
+            self._git_text(source, ["rev-parse", "--git-path", "info/attributes"]),
+        )
+        if info_attributes.is_file() and ATTRIBUTE_FILTER_PATTERN.search(
+            info_attributes.read_text(encoding="utf-8", errors="replace")
+        ):
+            raise UnsafeRepositoryError("repository info attributes select a filter")
+
+        tree = self._git(source, ["ls-tree", "-r", "-z", commit]).stdout
+        entries = [entry for entry in tree.split(b"\0") if entry]
+        if any(entry.startswith(b"160000 ") for entry in entries):
+            raise UnsafeRepositoryError("repositories with submodules are unsupported")
+        attribute_paths = []
+        for entry in entries:
+            _, separator, raw_path = entry.partition(b"\t")
+            if not separator:
+                raise RepositoryValidationError("cannot parse repository tree")
+            path = raw_path.decode("utf-8", errors="strict")
+            if PurePosixPath(path).name == ".gitattributes":
+                attribute_paths.append(path)
+        for path in attribute_paths:
+            size = int(self._git_text(source, ["cat-file", "-s", f"{commit}:{path}"]))
+            if size > 1024 * 1024:
+                raise UnsafeRepositoryError(
+                    "tracked attributes exceed the safety size limit"
+                )
+            content = self._git(source, ["show", f"{commit}:{path}"]).stdout.decode(
+                "utf-8", errors="replace"
+            )
+            if ATTRIBUTE_FILTER_PATTERN.search(content):
+                raise UnsafeRepositoryError(
+                    "tracked attributes select a checkout filter"
+                )
+
+    def _validate_working_tree_attributes(self, repository: Path) -> None:
+        for root, directories, filenames in os.walk(repository, followlinks=False):
+            directories[:] = [name for name in directories if name != ".git"]
+            if ".gitattributes" not in filenames:
+                continue
+            path = Path(root) / ".gitattributes"
+            if path.is_symlink():
+                raise UnsafeRepositoryError(
+                    "working-tree attributes cannot be a symbolic link"
+                )
+            try:
+                attributes_stat = path.stat(follow_symlinks=False)
+                if not stat.S_ISREG(attributes_stat.st_mode):
+                    raise UnsafeRepositoryError(
+                        "working-tree attributes must be a regular file"
+                    )
+                if attributes_stat.st_size > 1024 * 1024:
+                    raise UnsafeRepositoryError(
+                        "working-tree attributes exceed the safety size limit"
+                    )
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as error:
+                raise UnsafeRepositoryError(
+                    "cannot inspect working-tree attributes"
+                ) from error
+            if ATTRIBUTE_FILTER_PATTERN.search(content):
+                raise UnsafeRepositoryError(
+                    "working-tree attributes select a checkout filter"
+                )
+
+    @staticmethod
+    def _decode_repository_paths(payload: bytes, *, label: str) -> tuple[str, ...]:
+        try:
+            values = tuple(
+                item.decode("utf-8", errors="strict")
+                for item in payload.split(b"\0")
+                if item
+            )
+        except UnicodeDecodeError as error:
+            raise WorkspaceIntegrityError(
+                f"{label} contains a non-UTF-8 repository path"
+            ) from error
+        try:
+            return tuple(_require_safe_repository_path(value) for value in values)
+        except ValueError as error:
+            raise WorkspaceIntegrityError(
+                f"{label} contains an unsafe repository path"
+            ) from error
+
+    @staticmethod
+    def _untracked_path_sha256(repository: Path, relative_path: str) -> str:
+        """Hash one untracked entry without following repository-controlled links.
+
+        计算未跟踪文件的 SHA-256 摘要; 严格禁止跟随符号链接逃逸工作区边界。
+        """
+        root = repository.resolve(strict=True)
+        candidate = root.joinpath(*PurePosixPath(relative_path).parts)
+        try:
+            parent = candidate.parent.resolve(strict=True)
+            metadata = candidate.lstat()
+        except OSError as error:
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress changed during inspection"
+            ) from error
+        if parent != root and not parent.is_relative_to(root):
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress escapes the workspace"
+            )
+        digest = hashlib.sha256()
+        digest.update(f"{stat.S_IFMT(metadata.st_mode):o}\0".encode("ascii"))
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(candidate)
+            except OSError as error:
+                raise WorkspaceIntegrityError(
+                    "cannot inspect an untracked workspace symbolic link"
+                ) from error
+            digest.update(target.encode("utf-8", errors="surrogateescape"))
+            return digest.hexdigest()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise WorkspaceIntegrityError(
+                "untracked workspace progress must be a regular file or symlink"
+            )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(candidate, flags)
+        except OSError as error:
+            raise WorkspaceIntegrityError(
+                "cannot open untracked workspace progress safely"
+            ) from error
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != metadata.st_dev
+                or opened.st_ino != metadata.st_ino
+            ):
+                raise WorkspaceIntegrityError(
+                    "untracked workspace progress changed during inspection"
+                )
+            while chunk := os.read(descriptor, 64 * 1024):
+                digest.update(chunk)
+        finally:
+            os.close(descriptor)
+        return digest.hexdigest()
+
+    def _git_output_sha256(self, repository: Path, args: list[str]) -> str:
+        """Hash bounded-time Git stdout without retaining arbitrarily large diffs.
+
+        流式计算 Git 进程标准输出的 SHA-256 以避免大 diff 耗尽内存。
+        """
+        environment = self._git_environment()
+        command = self._git_command(repository, args, controller_config=True)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=output,
+                    stderr=errors,
+                    timeout=self.timeout_seconds,
+                    env=environment,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise GitCommandError(
+                    f"cannot execute Git operation: {args[0]}"
+                ) from error
+            if result.returncode != 0:
+                errors.seek(0)
+                detail = errors.read(4096).decode("utf-8", errors="replace").strip()
+                raise GitCommandError(
+                    f"Git operation {args[0]} failed with {result.returncode}: "
+                    f"{detail or 'no diagnostic output'}"
+                )
+            output.seek(0)
+            digest = hashlib.sha256()
+            while chunk := output.read(64 * 1024):
+                digest.update(chunk)
+            return digest.hexdigest()
+
+    def _status(self, repository: Path) -> bytes:
+        return self._git(
+            repository,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+        ).stdout.strip()
+
+    def _resolve_commit(self, repository: Path, ref: str) -> str:
+        result = self._git_text(
+            repository,
+            ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
+        )
+        if not re.fullmatch(COMMIT_PATTERN, result):
+            raise RepositoryValidationError("Git returned an invalid commit ID")
+        return result
+
+    @staticmethod
+    def _resolved_git_path(repository: Path, value: str) -> Path:
+        path = Path(value)
+        if not path.is_absolute():
+            path = repository / path
+        return path.resolve(strict=False)
+
+    def _git_text(self, repository: Path, args: list[str]) -> str:
+        return (
+            self._git(repository, args).stdout.decode("utf-8", errors="strict").strip()
+        )
+
+    def live_change_counts(
+        self, repository: Path, *, base_commit: str
+    ) -> tuple[int, int, bool]:
+        """Read a best-effort diff preview without executing generated programs.
+
+        尽力提取实时的行增减统计预览; 严防执行工作区内生成的恶意程序。
+        """
+        if (
+            repository.is_symlink()
+            or repository.resolve().parent != self.root.resolve()
+        ):
+            raise GitWorkspaceError("live diff must belong to one isolated workspace")
+        if re.fullmatch(COMMIT_PATTERN, base_commit) is None:
+            raise GitWorkspaceError("live diff requires an exact base commit")
+        records = self._git(
+            repository,
+            [
+                "diff",
+                "--numstat",
+                "-z",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                base_commit,
+                "--",
+            ],
+        ).stdout.split(b"\0")
+        added = removed = 0
+        partial = False
+        for record in records:
+            if not record:
+                continue
+            columns = record.split(b"\t", 2)
+            if (
+                len(columns) != 3
+                or not columns[0].isdigit()
+                or not columns[1].isdigit()
+            ):
+                partial = True
+                continue
+            added += int(columns[0])
+            removed += int(columns[1])
+        untracked = self._git(
+            repository, ["ls-files", "--others", "--exclude-standard", "-z"]
+        ).stdout
+        read_budget = 4 * 1024 * 1024
+        for file_index, relative in enumerate(untracked.split(b"\0")):
+            if not relative:
+                continue
+            if file_index >= 256 or read_budget <= 0:
+                partial = True
+                break
+            parts = Path(os.fsdecode(relative)).parts
+            if not parts or any(part in {"..", "/"} for part in parts):
+                partial = True
+                continue
+            directory = None
+            try:
+                directory = os.open(
+                    repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                )
+                for part in parts[:-1]:
+                    child = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=directory,
+                    )
+                    os.close(directory)
+                    directory = child
+                descriptor = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=directory,
+                )
+                try:
+                    metadata = os.fstat(descriptor)
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > min(
+                        1024 * 1024, read_budget
+                    ):
+                        partial = True
+                        continue
+                    data = os.read(descriptor, metadata.st_size + 1)
+                    read_budget -= len(data)
+                finally:
+                    os.close(descriptor)
+                if b"\0" in data:
+                    partial = True
+                    continue
+                added += data.count(b"\n") + int(
+                    bool(data) and not data.endswith(b"\n")
+                )
+            except OSError:
+                partial = True
+            finally:
+                if directory is not None:
+                    os.close(directory)
+        return added, removed, partial
+
+    def _git(
+        self,
+        repository: Path,
+        args: list[str],
+        *,
+        allowed_returncodes: Collection[int] = (0,),
+        controller_config: bool = True,
+    ) -> subprocess.CompletedProcess[bytes]:
+        environment = self._git_environment()
+        command = self._git_command(
+            repository,
+            args,
+            controller_config=controller_config,
+        )
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise GitCommandError(f"cannot execute Git operation: {args[0]}") from error
+        if result.returncode not in allowed_returncodes:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            if not detail:
+                detail = "no diagnostic output"
+            raise GitCommandError(
+                f"Git operation {args[0]} failed with {result.returncode}: {detail}"
+            )
+        return result
+
+    def _git_environment(self) -> dict[str, str]:
+        return git_environment(self.root)
+
+    def _git_command(
+        self, repository: Path, args: list[str], *, controller_config: bool
+    ) -> list[str]:
+        return git_command(
+            ["-C", str(repository), *args],
+            binary=self.git_binary,
+            controller_config=controller_config,
+        )
+
+
+__all__ = [
+    "GitWorkspaceManager",
+]

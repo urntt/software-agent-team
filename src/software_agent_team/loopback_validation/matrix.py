@@ -1,0 +1,682 @@
+"""Scenario execution, oracle evaluation, and test matrix runner.
+
+Architecture & Intent / 架构与设计意图:
+Orchestrates individual scenario execution through the isolated OpenClaw runtime,
+evaluates execution results against strict criteria, and drives matrix evaluation.
+- validate_scenario_outcome: Core oracle verifying exit codes, terminal phases,
+  liveness metrics, and scenario-specific invariants.
+- validate_matrix: Ensures every expected scenario was run exactly once without
+  unexpected scenarios.
+- validation_exit_code: Deterministic 0 or 2 exit code translation.
+- _serialize_invocation: Flattens agent telemetry into JSON-serializable payloads.
+- execute_scenario: Prepares workspace, materializes config, and executes scenario.
+- _run_matrix, _write_result, main: Command-line entry points and reporting.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import time
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from software_agent_team.artifacts import AgentRole, ArtifactKind
+from software_agent_team.execution import (
+    AgentExecutionActivityKind,
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    OpenClawSubprocessExecutor,
+    ProviderLivenessPolicy,
+    ResponseFinalizationPolicy,
+)
+from software_agent_team.loopback_validation.container_cleanup import (
+    remove_sandbox_sessions,
+    sandbox_container_ids,
+)
+from software_agent_team.loopback_validation.server import running_server
+from software_agent_team.loopback_validation.types import (
+    _EXPECTED_RESPONSE,
+    _EXPECTED_TERMINAL,
+    _TERMINAL_PHASES,
+    MODEL,
+    OPTIONAL_SCENARIOS,
+    SCENARIOS,
+    ScenarioValidation,
+    _mapping,
+    _sequence,
+)
+from software_agent_team.openclaw_runtime import isolated_openclaw_environment
+from software_agent_team.quality_gates import load_quality_gate_configuration
+from software_agent_team.runtime_configuration import materialize_run_configuration
+from software_agent_team.submissions import (
+    AgentSubmissionContract,
+    AgentSubmissionPurpose,
+)
+from software_agent_team.teams import AgentCapability, load_team_manifest
+
+
+def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidation:
+    """Compare one result with the complete oracle for its declared scenario."""
+    scenario_value = outcome.get("scenario")
+    scenario = scenario_value if isinstance(scenario_value, str) else "<missing>"
+    mismatches: list[str] = []
+    expected = _EXPECTED_TERMINAL.get(scenario)
+    if expected is None:
+        return ScenarioValidation(
+            scenario=scenario,
+            passed=False,
+            mismatches=(f"unknown scenario: {scenario}",),
+        )
+
+    expected_status, expected_reason = expected
+    if outcome.get("status") != expected_status:
+        mismatches.append(
+            f"status expected {expected_status!r}, got {outcome.get('status')!r}"
+        )
+    if outcome.get("stop_reason") != expected_reason:
+        mismatches.append(
+            "stop_reason expected "
+            f"{expected_reason!r}, got {outcome.get('stop_reason')!r}"
+        )
+
+    exit_code = outcome.get("exit_code")
+    if expected_status == "completed":
+        if exit_code != 0:
+            mismatches.append(f"exit_code expected 0, got {exit_code!r}")
+        if (
+            scenario not in {"submission-contract", "tool-warning-submission"}
+            and outcome.get("response_text") != _EXPECTED_RESPONSE
+        ):
+            mismatches.append("completed response_text did not match the fixture")
+        if outcome.get("provider") != MODEL.split("/", 1)[0]:
+            mismatches.append("completed provider identity did not match the fixture")
+        if outcome.get("model") != MODEL:
+            mismatches.append("completed model identity did not match the fixture")
+    elif not isinstance(exit_code, int) or exit_code == 0:
+        mismatches.append(f"failure exit_code must be non-zero, got {exit_code!r}")
+
+    phases = tuple(str(item) for item in _sequence(outcome.get("phases")))
+    if phases[-len(_TERMINAL_PHASES) :] != _TERMINAL_PHASES:
+        mismatches.append(
+            "terminal phases must end with stopping, collecting_evidence, stopped"
+        )
+    if outcome.get("cleanup_completed") is not True:
+        mismatches.append("lifecycle cleanup_completed must be true")
+    if outcome.get("sandbox_containers_before_launch") != []:
+        mismatches.append(
+            "scenario did not start with an empty exact sandbox inventory"
+        )
+    sandbox_cleanup = _mapping(outcome.get("sandbox_cleanup"))
+    if sandbox_cleanup.get("completed") is not True:
+        mismatches.append("exact sandbox cleanup must complete")
+    if sandbox_cleanup.get("container_ids_after_cleanup") != []:
+        mismatches.append("exact sandbox inventory must be empty after cleanup")
+    requests_seen = outcome.get("requests_seen")
+    if not isinstance(requests_seen, int) or requests_seen < 1:
+        mismatches.append("loopback endpoint must observe at least one request")
+
+    liveness = _mapping(outcome.get("liveness"))
+    if liveness.get("lease_started") is not True:
+        mismatches.append("provider liveness lease did not start")
+    if liveness.get("raw_stream_observed") is not True:
+        mismatches.append("private provider stream was not observed")
+
+    suspected = liveness.get("stall_suspected_count")
+    recovered = liveness.get("stall_recovered_count")
+    if scenario == "stream":
+        if liveness.get("stalled") is not False:
+            mismatches.append("productive stream was marked stalled")
+        if suspected != 0 or recovered != 0:
+            mismatches.append("productive stream unexpectedly entered stall grace")
+        if liveness.get("terminal_response_observed") is not True:
+            mismatches.append("productive stream did not observe a terminal response")
+    elif scenario == "recovery":
+        if liveness.get("stalled") is not False:
+            mismatches.append("recovery scenario remained stalled")
+        if not isinstance(suspected, int) or suspected < 2:
+            mismatches.append("recovery scenario must enter stall grace at least twice")
+        if recovered != suspected:
+            mismatches.append("every recovery suspicion must have a matching recovery")
+        if liveness.get("terminal_response_observed") is not True:
+            mismatches.append("recovery scenario did not observe a terminal response")
+        event_kinds = [
+            _mapping(item).get("kind")
+            for item in _sequence(outcome.get("server_events"))
+        ]
+        if event_kinds.count("controller_stall_signal") < 2:
+            mismatches.append(
+                "recovery activity was not released by two Controller observations"
+            )
+        if "recovery_signal_timeout" in event_kinds:
+            mismatches.append("recovery endpoint timed out waiting for the Controller")
+    elif scenario == "disconnect":
+        if liveness.get("stalled") is not False:
+            mismatches.append("network disconnect was misclassified as provider stall")
+    elif scenario == "hang":
+        if liveness.get("stalled") is not True:
+            mismatches.append("permanent silence did not produce provider stall")
+        if not isinstance(suspected, int) or suspected < 1:
+            mismatches.append("permanent silence did not enter stall grace")
+        if recovered != 0:
+            mismatches.append("permanent silence recorded a false recovery")
+    elif scenario == "tool-rejection":
+        if liveness.get("degradation_reason") is not None:
+            mismatches.append("runtime rejection degraded session attribution")
+        if outcome.get("tool_evidence_status") != "captured":
+            mismatches.append("paired tool evidence was not captured")
+        rejections = _sequence(outcome.get("runtime_rejections"))
+        calls = _sequence(outcome.get("tool_calls"))
+        if (
+            len(rejections) != 1
+            or _mapping(rejections[0]).get("reason") != "unknown_tool"
+        ):
+            mismatches.append("expected one unknown-tool runtime diagnostic")
+        if len(calls) != 1 or (
+            _mapping(calls[0]).get("tool_name") != "read"
+            or _mapping(calls[0]).get("outcome") != "succeeded"
+            or "LOOPBACK_READ_OK" not in str(_mapping(calls[0]).get("output_excerpt"))
+        ):
+            mismatches.append("expected independent successful fixture read evidence")
+        if requests_seen != 3:
+            mismatches.append("expected rejection, read, and final response requests")
+    elif scenario in {"submission-contract", "tool-warning-submission"}:
+        events = _sequence(outcome.get("server_events"))
+        if not any(
+            _mapping(item).get("kind") == "submission_contract"
+            and _mapping(item).get("valid") is True
+            for item in events
+        ):
+            mismatches.append("provider did not see the bound submission tool")
+        if _mapping(outcome.get("semantic_submission")).get("status") != "ok":
+            mismatches.append("bound tool did not submit the semantic payload")
+        if outcome.get("submission_evidence_status") != "accepted":
+            mismatches.append("bound submission evidence was not accepted")
+        if scenario == "tool-warning-submission":
+            calls = _sequence(outcome.get("tool_calls"))
+            if len(calls) != 2 or (
+                _mapping(calls[0]).get("tool_name") != "ls"
+                or _mapping(calls[0]).get("is_error") is not True
+                or _mapping(calls[1]).get("tool_name") != "sat_submit_artifact"
+                or _mapping(calls[1]).get("outcome") != "succeeded"
+            ):
+                mismatches.append(
+                    "historical failure and final receipt were not retained"
+                )
+            if requests_seen != 2:
+                mismatches.append("expected failed ls followed by terminal submission")
+    elif scenario == "continuation":
+        invocations = _sequence(outcome.get("invocations"))
+        if len(invocations) != 2:
+            mismatches.append("continuation must record exactly two invocations")
+        else:
+            for index, invocation in enumerate(invocations, start=1):
+                item = _mapping(invocation)
+                if item.get("status") != "completed" or item.get("exit_code") != 0:
+                    mismatches.append(
+                        f"continuation invocation {index} did not complete"
+                    )
+                initialization = _mapping(item.get("initialization"))
+                if initialization.get("mode") != "enforced":
+                    mismatches.append(
+                        "continuation invocation "
+                        f"{index} lacked enforced initialization"
+                    )
+                checkpoints = _sequence(initialization.get("checkpoints"))
+                if index == 1 and not {
+                    "current_turn",
+                    "provider_stream",
+                }.intersection(checkpoints):
+                    mismatches.append(
+                        "continuation invocation 1 lacked attributable readiness"
+                    )
+                if index == 2 and "current_turn" not in checkpoints:
+                    mismatches.append(
+                        "continuation invocation 2 lacked a new current turn"
+                    )
+            second_initialization = _mapping(
+                _mapping(invocations[1]).get("initialization")
+            )
+            if second_initialization.get("baseline_checkpoint") != "current_turn":
+                mismatches.append(
+                    "continuation did not start from the existing current turn"
+                )
+            matching_turn_count = second_initialization.get(
+                "baseline_matching_turn_count"
+            )
+            if not isinstance(matching_turn_count, int) or matching_turn_count < 1:
+                mismatches.append(
+                    "continuation did not preserve the matching-turn baseline"
+                )
+        if requests_seen != 2:
+            mismatches.append("continuation endpoint must observe exactly two requests")
+    elif scenario == "correction":
+        invocations = _sequence(outcome.get("invocations"))
+        if len(invocations) != 2:
+            mismatches.append("correction must record exactly two invocations")
+        else:
+            sessions = tuple(
+                _mapping(invocation).get("session_key") for invocation in invocations
+            )
+            if (
+                not all(isinstance(session, str) for session in sessions)
+                or sessions[0] == sessions[1]
+                or not str(sessions[1]).endswith("-g2")
+            ):
+                mismatches.append(
+                    "correction must use a distinct second session generation"
+                )
+            for index, invocation in enumerate(invocations, start=1):
+                item = _mapping(invocation)
+                if item.get("status") != "completed" or item.get("exit_code") != 0:
+                    mismatches.append(f"correction invocation {index} did not complete")
+                initialization = _mapping(item.get("initialization"))
+                if initialization.get("mode") != "enforced":
+                    mismatches.append(
+                        f"correction invocation {index} lacked enforced initialization"
+                    )
+                if not {"current_turn", "provider_stream"}.intersection(
+                    _sequence(initialization.get("checkpoints"))
+                ):
+                    mismatches.append(
+                        f"correction invocation {index} lacked attributable readiness"
+                    )
+        if requests_seen != 2:
+            mismatches.append("correction endpoint must observe exactly two requests")
+
+    return ScenarioValidation(
+        scenario=scenario,
+        passed=not mismatches,
+        mismatches=tuple(mismatches),
+    )
+
+
+def validate_matrix(
+    outcomes: Sequence[Mapping[str, object]],
+    *,
+    expected_scenarios: Sequence[str] = SCENARIOS,
+) -> dict[str, object]:
+    """Validate presence, uniqueness, and the typed oracle for every scenario."""
+    expected = tuple(expected_scenarios)
+    observed_names = [outcome.get("scenario") for outcome in outcomes]
+    matrix_mismatches: list[str] = []
+    for scenario in expected:
+        count = observed_names.count(scenario)
+        if count != 1:
+            matrix_mismatches.append(
+                f"scenario {scenario!r} expected exactly once, observed {count}"
+            )
+    unexpected = sorted(
+        name
+        for name in observed_names
+        if isinstance(name, str) and name not in expected
+    )
+    if unexpected:
+        matrix_mismatches.append(f"unexpected scenarios: {', '.join(unexpected)}")
+
+    scenarios = [validate_scenario_outcome(outcome) for outcome in outcomes]
+    passed = not matrix_mismatches and all(item.passed for item in scenarios)
+    return {
+        "schema_version": 1,
+        "passed": passed,
+        "matrix_mismatches": matrix_mismatches,
+        "scenarios": [item.as_dict() for item in scenarios],
+    }
+
+
+def validation_exit_code(validation: Mapping[str, object]) -> int:
+    """Return a shell gate status from a matrix verdict."""
+    return 0 if validation.get("passed") is True else 2
+
+
+def _serialize_invocation(
+    result: AgentExecutionResult,
+    activities: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Serialize one invocation without losing initialization evidence."""
+    lifecycle = result.telemetry.invocation_lifecycle
+    provider_liveness = result.telemetry.provider_liveness
+    response_finalization = (
+        None if lifecycle is None else lifecycle.response_finalization
+    )
+    return {
+        "status": result.status.value,
+        "error": result.error,
+        "stop_reason": (None if lifecycle is None else lifecycle.shutdown.reason.value),
+        "response_text": result.response_text,
+        "semantic_submission": (
+            None
+            if result.semantic_submission is None
+            else result.semantic_submission.payload
+        ),
+        "submission_evidence_status": (
+            None
+            if result.submission_evidence is None
+            else result.submission_evidence.status.value
+        ),
+        "exit_code": result.telemetry.exit_code,
+        "duration_ms": result.telemetry.duration_ms,
+        "provider": result.telemetry.provider,
+        "model": result.telemetry.model,
+        "session_key": result.telemetry.session_key,
+        "usage": (
+            None
+            if result.telemetry.usage is None
+            else result.telemetry.usage.model_dump(mode="json")
+        ),
+        "tool_evidence_status": result.telemetry.tool_evidence_status.value,
+        "tool_evidence_error": result.telemetry.tool_evidence_error,
+        "tool_calls": [
+            item.model_dump(mode="json") for item in result.telemetry.tool_calls
+        ],
+        "runtime_rejections": [
+            item.model_dump(mode="json") for item in result.telemetry.runtime_rejections
+        ],
+        "initialization": (
+            None
+            if lifecycle is None
+            else lifecycle.initialization.model_dump(mode="json")
+        ),
+        "liveness": (
+            None
+            if provider_liveness is None
+            else provider_liveness.model_dump(mode="json")
+        ),
+        "response_finalization": (
+            None
+            if response_finalization is None
+            else response_finalization.model_dump(mode="json")
+        ),
+        "phases": (
+            []
+            if lifecycle is None
+            else [item.phase.value for item in lifecycle.transitions]
+        ),
+        "activities": list(activities),
+        "cleanup_completed": (
+            None if lifecycle is None else lifecycle.shutdown.cleanup_completed
+        ),
+        "stdout_tail": result.telemetry.stdout[-4000:],
+        "stderr_tail": result.telemetry.stderr[-4000:],
+    }
+
+
+def execute_scenario(
+    repository: Path,
+    root: Path,
+    openclaw: Path,
+    docker_binary: str,
+    sandbox_image: str,
+    sandbox_user: str,
+    scenario: str,
+    prompt_padding_chars: int = 0,
+) -> dict[str, object]:
+    """Execute one real OpenClaw transport scenario through the SAT adapter."""
+    scenario_root = root / scenario
+    state = scenario_root / "state"
+    workspace = scenario_root / "workspace"
+    state.mkdir(mode=0o700, parents=True)
+    workspace.mkdir()
+    if scenario == "tool-rejection":
+        (workspace / "fixture.txt").write_text("LOOPBACK_READ_OK\n", encoding="utf-8")
+    config = scenario_root / "openclaw.json"
+    materialize_run_configuration(
+        repository / "configs/openclaw.example.json5",
+        config,
+        manifest=load_team_manifest(repository / "configs/teams.json"),
+        workspace=workspace,
+        sandbox_image=sandbox_image,
+        sandbox_user=sandbox_user,
+        model=MODEL,
+        bootstrap_capability=(
+            None if scenario == "tool-rejection" else AgentCapability.PLANNING
+        ),
+    )
+
+    with running_server(scenario) as server:
+        payload = json.loads(config.read_text(encoding="utf-8"))
+        if scenario == "tool-warning-submission":
+            # The isolated fixture permits one real failed ls before the
+            # terminal plugin. Production Planning permissions are unchanged.
+            payload["agents"]["entries"]["planner"]["tools"]["allow"].append("ls")
+        provider_name = MODEL.split("/", 1)[0]
+        provider = payload["models"]["providers"][provider_name]
+        provider["baseUrl"] = f"http://127.0.0.1:{server.server_port}/v1"
+        provider["apiKey"] = "${DEEPSEEK_API_KEY}"
+        config.write_text(json.dumps(payload), encoding="utf-8")
+        config.chmod(0o600)
+        environment = isolated_openclaw_environment(
+            state_dir=state,
+            config_path=config,
+            ambient_environment=os.environ,
+        )
+        environment["DEEPSEEK_API_KEY"] = "loopback-not-a-secret"
+        validation_identity = hashlib.sha256(
+            str(scenario_root.resolve()).encode()
+        ).hexdigest()[:12]
+        prompt = 'Reply with exactly: {"status":"ok"}'
+        if scenario == "submission-contract" and prompt_padding_chars:
+            prompt += "\nCompression boundary fixture: " + "P" * prompt_padding_chars
+        request = AgentExecutionRequest(
+            run_id=f"loopback-{scenario}-{validation_identity}",
+            team_id="loopback_validation",
+            iteration=1,
+            role=AgentRole.PLANNER,
+            expected_kind=ArtifactKind.IMPLEMENTATION_PLAN,
+            prompt=prompt,
+            timeout_seconds=0,
+            model=MODEL,
+            submission_contract=(
+                AgentSubmissionContract.from_schema(
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"status": {"type": "string"}},
+                        "required": ["status"],
+                    },
+                    purpose=AgentSubmissionPurpose.PLANNING_RESPONSE,
+                )
+                if scenario in {"submission-contract", "tool-warning-submission"}
+                else None
+            ),
+        )
+        requests = (
+            (request, request.model_copy(update={"session_generation": 2}))
+            if scenario == "correction"
+            else ((request, request) if scenario == "continuation" else (request,))
+        )
+        session_keys = tuple(item.session_key for item in requests)
+        containers_before_launch = sandbox_container_ids(docker_binary, state)
+        if containers_before_launch:
+            raise RuntimeError(
+                "fresh loopback session key already owns containers: "
+                f"{containers_before_launch}"
+            )
+        liveness = ProviderLivenessPolicy(
+            model=MODEL,
+            silence_seconds=4.0,
+            stall_grace_seconds=2.0,
+            source="controlled loopback validation",
+        )
+        executor = OpenClawSubprocessExecutor(
+            openclaw_binary=openclaw,
+            environment=environment,
+            local=True,
+            process_grace_seconds=2,
+            liveness_poll_seconds=0.05,
+            liveness_policies={MODEL: liveness},
+            response_finalization_policy=ResponseFinalizationPolicy(
+                no_progress_seconds=60.0,
+                stall_grace_seconds=10.0,
+                source="controlled loopback response-finalization validation",
+            ),
+        )
+        invocations: list[dict[str, object]] = []
+        current_activities: list[dict[str, object]] = []
+        try:
+            for invocation_request in requests:
+                current_activities = []
+                activity_started = time.monotonic()
+
+                def record_activity(
+                    activity: object,
+                    activity_records: list[dict[str, object]] = current_activities,
+                    started: float = activity_started,
+                ) -> None:
+                    dumped = activity.model_dump(mode="json")
+                    activity_records.append(
+                        {
+                            "elapsed_ms": round((time.monotonic() - started) * 1000),
+                            "activity": dumped,
+                        }
+                    )
+                    if (
+                        scenario == "recovery"
+                        and dumped.get("kind")
+                        == AgentExecutionActivityKind.STALL_SUSPECTED.value
+                    ):
+                        server.signal_controller_stall()
+
+                result = executor.execute(
+                    invocation_request,
+                    activity_handler=record_activity,
+                )
+                invocations.append(_serialize_invocation(result, current_activities))
+                if result.status.value != "completed":
+                    break
+        except Exception as error:  # pragma: no cover - exercised by the live tool
+            sandbox_cleanup = remove_sandbox_sessions(
+                docker_binary, session_keys, state_root=state
+            )
+            return {
+                "scenario": scenario,
+                "status": "validation_exception",
+                "stop_reason": None,
+                "response_text": None,
+                "exit_code": None,
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "phases": [],
+                "activities": current_activities,
+                "invocations": invocations,
+                "server_events": list(server.events),
+                "requests_seen": server.requests_seen,
+                "cleanup_completed": False,
+                "sandbox_containers_before_launch": containers_before_launch,
+                "sandbox_cleanup": sandbox_cleanup,
+            }
+        sandbox_cleanup = remove_sandbox_sessions(
+            docker_binary, session_keys, state_root=state
+        )
+
+    final_invocation = invocations[-1]
+    return {
+        "scenario": scenario,
+        "prompt_padding_chars": prompt_padding_chars,
+        **final_invocation,
+        "invocations": invocations,
+        "server_events": list(server.events),
+        "requests_seen": server.requests_seen,
+        "sandbox_containers_before_launch": containers_before_launch,
+        "sandbox_cleanup": sandbox_cleanup,
+    }
+
+
+def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
+    """Execute all requested scenarios and validate against the oracle matrix."""
+    repository = args.repository.resolve(strict=True)
+    openclaw = args.openclaw.resolve(strict=True)
+    configuration = load_quality_gate_configuration(
+        repository / "configs/run-policy.json",
+        repository / "benchmarks/task_manager/benchmark.json",
+    )
+    scenarios = tuple(args.scenario or SCENARIOS)
+    if args.prompt_padding_chars and scenarios != ("submission-contract",):
+        raise ValueError("prompt padding requires only submission-contract")
+    if args.work_root is not None:
+        root = args.work_root.resolve()
+        root.mkdir(parents=True, exist_ok=False)
+        outcomes = [
+            execute_scenario(
+                repository,
+                root,
+                openclaw,
+                args.docker,
+                configuration.policy.sandbox.image,
+                args.sandbox_user,
+                scenario,
+                args.prompt_padding_chars,
+            )
+            for scenario in scenarios
+        ]
+    else:
+        with TemporaryDirectory(prefix="sat-loopback-") as temporary:
+            outcomes = [
+                execute_scenario(
+                    repository,
+                    Path(temporary),
+                    openclaw,
+                    args.docker,
+                    configuration.policy.sandbox.image,
+                    args.sandbox_user,
+                    scenario,
+                    args.prompt_padding_chars,
+                )
+                for scenario in scenarios
+            ]
+    return {
+        "schema_version": 4,
+        "model": MODEL,
+        "external_provider_calls": 0,
+        "outcomes": outcomes,
+        "validation": validate_matrix(outcomes, expected_scenarios=scenarios),
+    }
+
+
+def _write_result(payload: Mapping[str, object], output: Path | None) -> None:
+    """Write or print the formatted execution result and matrix verdict."""
+    rendered = json.dumps(payload, indent=2) + "\n"
+    if output is None:
+        print(rendered, end="")
+        return
+    output = output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        output,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    try:
+        os.write(descriptor, rendered.encode())
+    finally:
+        os.close(descriptor)
+    print(f"loopback validation: {output}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the controlled matrix and fail closed on any oracle mismatch."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repository", type=Path, default=Path.cwd())
+    parser.add_argument("--openclaw", type=Path, required=True)
+    parser.add_argument("--docker", default="docker")
+    parser.add_argument("--sandbox-user", default="1000:1000")
+    parser.add_argument(
+        "--scenario", choices=(*SCENARIOS, *OPTIONAL_SCENARIOS), action="append"
+    )
+    parser.add_argument("--work-root", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--prompt-padding-chars", type=int, default=0)
+    args = parser.parse_args(argv)
+    if not 0 <= args.prompt_padding_chars <= 200_000:
+        parser.error("prompt padding must be between 0 and 200000 characters")
+
+    payload = _run_matrix(args)
+    _write_result(payload, args.output)
+    return validation_exit_code(_mapping(payload.get("validation")))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
