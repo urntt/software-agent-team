@@ -1,4 +1,9 @@
-"""Safe isolated Git clone preparation and immutable snapshot verification."""
+"""Safe isolated Git clone preparation, execution, and verification manager.
+
+Git 隔离工作区生命周期管理器。
+负责从源仓库安全克隆隔离工作区、检出分离 HEAD、执行无副作用状态验证、
+提取增量哈希摘要、审查提交快照以及安全清理。
+"""
 
 from __future__ import annotations
 
@@ -8,212 +13,42 @@ import re
 import stat
 import subprocess
 import tempfile
-from collections.abc import Callable, Collection
-from datetime import UTC, datetime
+from collections.abc import Collection
 from pathlib import Path, PurePosixPath
-from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from software_agent_team.artifacts import WorkResult
 from software_agent_team.git_policy import (
     UNSAFE_CONFIG_PATTERN,
     git_command,
     git_environment,
 )
 
-COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
-RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-ATTRIBUTE_FILTER_PATTERN = re.compile(r"(?:^|\s)[-!]?filter(?:=|\s|$)")
-
-
-class GitWorkspaceError(ValueError):
-    """Base error for isolated Git workspace operations."""
-
-
-class GitCommandError(GitWorkspaceError):
-    """Raised when a bounded Git subprocess returns an unexpected result."""
-
-
-class RepositoryValidationError(GitWorkspaceError):
-    """Raised when a source repository cannot provide a controlled snapshot."""
-
-
-class UnsafeRepositoryError(RepositoryValidationError):
-    """Raised when checkout could execute repository-controlled programs."""
-
-
-class WorkspaceAlreadyExistsError(GitWorkspaceError):
-    """Raised when the derived workspace path is already occupied."""
-
-
-class WorkspaceIntegrityError(GitWorkspaceError):
-    """Raised when a workspace or snapshot disagrees with verified Git state."""
-
-
-def _require_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("workspace timestamps must include a timezone")
-    return value.astimezone(UTC)
-
-
-def _require_safe_repository_path(value: str) -> str:
-    if "\\" in value:
-        raise ValueError("repository paths must use POSIX separators")
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
-        raise ValueError("repository paths must be safe relative paths")
-    return value
-
-
-class GitWorkspace(BaseModel):
-    """Immutable identity of one detached, self-contained run clone."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    source_repository: str = Field(min_length=1)
-    workspace_path: str = Field(min_length=1)
-    base_commit: str = Field(pattern=COMMIT_PATTERN)
-    created_at: datetime
-
-    @field_validator("created_at")
-    @classmethod
-    def require_utc_timestamp(cls, value: datetime) -> datetime:
-        """Normalize workspace timestamps to UTC."""
-
-        return _require_utc(value)
-
-    @field_validator("source_repository", "workspace_path")
-    @classmethod
-    def require_absolute_path(cls, value: str) -> str:
-        """Persist explicit machine-local paths for recovery."""
-
-        if not Path(value).is_absolute():
-            raise ValueError("workspace paths must be absolute")
-        return value
-
-    @model_validator(mode="after")
-    def validate_distinct_paths(self) -> Self:
-        """Never treat the source checkout as its own isolated workspace."""
-
-        if self.source_repository == self.workspace_path:
-            raise ValueError("source repository and workspace paths must differ")
-        return self
-
-
-class GitSnapshot(BaseModel):
-    """Controller-verified immutable commit boundary for one iteration."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    run_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    iteration: int = Field(ge=1)
-    input_commit: str = Field(pattern=COMMIT_PATTERN)
-    output_commit: str = Field(pattern=COMMIT_PATTERN)
-    commit_count: int = Field(ge=1)
-    changed_files: tuple[str, ...] = Field(min_length=1)
-    recorded_at: datetime
-
-    @field_validator("recorded_at")
-    @classmethod
-    def require_utc_timestamp(cls, value: datetime) -> datetime:
-        """Normalize snapshot timestamps to UTC."""
-
-        return _require_utc(value)
-
-    @field_validator("changed_files")
-    @classmethod
-    def require_safe_changed_files(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        """Keep verified paths unique, relative, and portable."""
-
-        if len(values) != len(set(values)):
-            raise ValueError("snapshot changed files must be unique")
-        if any(not value for value in values):
-            raise ValueError("snapshot changed files must not be blank")
-        return tuple(_require_safe_repository_path(value) for value in values)
-
-    @model_validator(mode="after")
-    def validate_commits(self) -> Self:
-        """Require a new output commit."""
-
-        if self.input_commit == self.output_commit:
-            raise ValueError("snapshot output commit must differ from input")
-        return self
-
-
-class GitWorkspaceProgress(BaseModel):
-    """Content-digested, non-deliverable state used for safe continuation."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    input_commit: str = Field(pattern=COMMIT_PATTERN)
-    current_commit: str = Field(pattern=COMMIT_PATTERN)
-    commits_ahead: int = Field(ge=0)
-    changed_files: tuple[str, ...] = ()
-    has_uncommitted_changes: bool
-    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-    @field_validator("changed_files")
-    @classmethod
-    def require_safe_changed_files(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        """Keep progress paths ordered, unique, and repository-relative."""
-
-        if tuple(sorted(values)) != values or len(values) != len(set(values)):
-            raise ValueError("workspace progress paths must be sorted and unique")
-        return tuple(_require_safe_repository_path(value) for value in values)
-
-    @model_validator(mode="after")
-    def bind_progress_to_git_state(self) -> Self:
-        """Keep commit, dirty-state, and path evidence coherent."""
-
-        if (self.current_commit == self.input_commit) != (self.commits_ahead == 0):
-            raise ValueError("workspace progress commit evidence is inconsistent")
-        if (self.commits_ahead > 0 or self.has_uncommitted_changes) and not (
-            self.changed_files
-        ):
-            raise ValueError("workspace progress requires changed paths")
-        if self.changed_files and not (
-            self.commits_ahead > 0 or self.has_uncommitted_changes
-        ):
-            raise ValueError("unchanged workspace cannot report changed paths")
-        return self
-
-    @property
-    def made_progress(self) -> bool:
-        """Return whether this state differs materially from the input commit."""
-
-        return bool(self.changed_files)
-
-
-def validate_work_result_snapshot(
-    work_result: WorkResult,
-    snapshot: GitSnapshot,
-) -> None:
-    """Require an Agent work result to match controller-verified Git evidence."""
-
-    if work_result.run_id != snapshot.run_id:
-        raise WorkspaceIntegrityError("work result and snapshot run IDs differ")
-    if work_result.iteration != snapshot.iteration:
-        raise WorkspaceIntegrityError("work result and snapshot iterations differ")
-    if (
-        work_result.input_commit != snapshot.input_commit
-        or work_result.output_commit != snapshot.output_commit
-    ):
-        raise WorkspaceIntegrityError("work result and snapshot commits differ")
-    if set(work_result.changed_files) != set(snapshot.changed_files):
-        raise WorkspaceIntegrityError("work result and snapshot changed files differ")
-
-
-Clock = Callable[[], datetime]
-
-
-def _system_clock() -> datetime:
-    return datetime.now(UTC)
+from .types import (
+    ATTRIBUTE_FILTER_PATTERN,
+    COMMIT_PATTERN,
+    RUN_ID_PATTERN,
+    Clock,
+    GitCommandError,
+    GitSnapshot,
+    GitWorkspace,
+    GitWorkspaceError,
+    GitWorkspaceProgress,
+    RepositoryValidationError,
+    UnsafeRepositoryError,
+    WorkspaceAlreadyExistsError,
+    WorkspaceIntegrityError,
+    _require_safe_repository_path,
+    _require_utc,
+    _system_clock,
+)
 
 
 class GitWorkspaceManager:
-    """Prepare detached standalone clones and verify Agent-created commits."""
+    """Prepare detached standalone clones and verify Agent-created commits.
+
+    隔离工作区管理器。
+    负责分配与初始化无远端的完全独立工作区; 提供无执行风险的 Git 子进程控制,
+    严格核验提交哈希历史与工作树清洁度。
+    """
 
     def __init__(
         self,
@@ -237,8 +72,10 @@ class GitWorkspaceManager:
         source_repository: Path,
         base_ref: str = "HEAD",
     ) -> GitWorkspace:
-        """Create one detached standalone clone from a validated repository."""
+        """Create one detached standalone clone from a validated repository.
 
+        从经验证的源仓库创建单个处于分离 HEAD 状态的自包含工作区克隆。
+        """
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
         source, base_commit, author_name, author_email = (
@@ -293,8 +130,10 @@ class GitWorkspaceManager:
         *,
         base_ref: str = "HEAD",
     ) -> str:
-        """Validate every source precondition without creating a workspace."""
+        """Validate every source precondition without creating a workspace.
 
+        在不创建工作区的情况下校验源仓库的所有前置安全条件并返回基线提交。
+        """
         _, base_commit, _, _ = self._validated_source_repository(
             source_repository,
             base_ref=base_ref,
@@ -308,8 +147,10 @@ class GitWorkspaceManager:
         expected_commit: str | None = None,
         require_clean: bool = False,
     ) -> str:
-        """Verify standalone clone identity, state, commit, and cleanliness."""
+        """Verify standalone clone identity, state, commit, and cleanliness.
 
+        严格验证独立克隆工作区的身份、自包含元数据、分离 HEAD 状态与工作区清洁度。
+        """
         try:
             source = self._validate_source(Path(workspace.source_repository))
         except GitWorkspaceError as error:
@@ -388,8 +229,10 @@ class GitWorkspaceManager:
         *,
         input_commit: str,
     ) -> GitWorkspaceProgress:
-        """Verify and digest a possibly dirty descendant without accepting it."""
+        """Verify and digest a possibly dirty descendant without accepting it.
 
+        检验并提取可能包含未提交脏变更的后代工作区状态哈希摘要。
+        """
         if not re.fullmatch(COMMIT_PATTERN, input_commit):
             raise WorkspaceIntegrityError("workspace progress input commit is invalid")
         run_workspace = Path(workspace.workspace_path)
@@ -489,15 +332,16 @@ class GitWorkspaceManager:
         source_repository: Path,
         base_ref: str = "HEAD",
     ) -> GitWorkspace:
-        """Explicitly recover a matching clone created before state attachment."""
+        """Explicitly recover a matching clone created before state attachment.
 
+        在崩溃或重启后显式恢复并校验此前已成功初始化的独立工作区。
+        """
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise GitWorkspaceError(f"invalid run ID: {run_id}")
         source, base_commit, _, _ = self._validated_source_repository(
             source_repository,
             base_ref=base_ref,
         )
-
         if self.root.is_symlink() or not self.root.is_dir():
             raise WorkspaceIntegrityError("workspace root is unavailable for recovery")
         root = self.root.resolve(strict=True)
@@ -530,8 +374,10 @@ class GitWorkspaceManager:
         *,
         base_ref: str,
     ) -> tuple[Path, str, str, str]:
-        """Return one source snapshot after all preparation checks pass."""
+        """Return one source snapshot after all preparation checks pass.
 
+        全面审查源仓库的前置完整性与安全性: 返回权威路径、基线提交及作者身份。
+        """
         source = self._validate_source(source_repository)
         if not base_ref:
             raise RepositoryValidationError("base ref must not be empty")
@@ -550,8 +396,10 @@ class GitWorkspaceManager:
         iteration: int,
         input_commit: str,
     ) -> GitSnapshot:
-        """Verify and describe one clean descendant commit range."""
+        """Verify and describe one clean descendant commit range.
 
+        验证并构建单次迭代生成的清洁后代提交快照契约。
+        """
         if type(iteration) is not int or iteration < 1:
             raise WorkspaceIntegrityError(
                 "snapshot iteration must be a positive integer"
@@ -613,8 +461,10 @@ class GitWorkspaceManager:
         )
 
     def _source_commit_identity(self, source: Path) -> tuple[str, str]:
-        """Read the explicit local identity copied into the isolated clone."""
+        """Read the explicit local identity copied into the isolated clone.
 
+        读取源仓库本地配置的 user.name 与 user.email 用于注入隔离环境。
+        """
         try:
             name = self._git_text(source, ["config", "--local", "--get", "user.name"])
             email = self._git_text(
@@ -774,8 +624,10 @@ class GitWorkspaceManager:
 
     @staticmethod
     def _untracked_path_sha256(repository: Path, relative_path: str) -> str:
-        """Hash one untracked entry without following repository-controlled links."""
+        """Hash one untracked entry without following repository-controlled links.
 
+        计算未跟踪文件的 SHA-256 摘要; 严格禁止跟随符号链接逃逸工作区边界。
+        """
         root = repository.resolve(strict=True)
         candidate = root.joinpath(*PurePosixPath(relative_path).parts)
         try:
@@ -828,8 +680,10 @@ class GitWorkspaceManager:
         return digest.hexdigest()
 
     def _git_output_sha256(self, repository: Path, args: list[str]) -> str:
-        """Hash bounded-time Git stdout without retaining arbitrarily large diffs."""
+        """Hash bounded-time Git stdout without retaining arbitrarily large diffs.
 
+        流式计算 Git 进程标准输出的 SHA-256 以避免大 diff 耗尽内存。
+        """
         environment = self._git_environment()
         command = self._git_command(repository, args, controller_config=True)
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
@@ -889,8 +743,10 @@ class GitWorkspaceManager:
     def live_change_counts(
         self, repository: Path, *, base_commit: str
     ) -> tuple[int, int, bool]:
-        """Read a best-effort diff preview without executing generated programs."""
+        """Read a best-effort diff preview without executing generated programs.
 
+        尽力提取实时的行增减统计预览; 严防执行工作区内生成的恶意程序。
+        """
         if (
             repository.is_symlink()
             or repository.resolve().parent != self.root.resolve()
@@ -1026,3 +882,8 @@ class GitWorkspaceManager:
             binary=self.git_binary,
             controller_config=controller_config,
         )
+
+
+__all__ = [
+    "GitWorkspaceManager",
+]
