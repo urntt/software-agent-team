@@ -1,4 +1,17 @@
-"""Validate the pinned OpenClaw transport against a controlled SSE endpoint."""
+"""Scenario execution, oracle evaluation, and test matrix runner.
+
+Architecture & Intent / 架构与设计意图:
+Orchestrates individual scenario execution through the isolated OpenClaw runtime,
+evaluates execution results against strict criteria, and drives matrix evaluation.
+- validate_scenario_outcome: Core oracle verifying exit codes, terminal phases,
+  liveness metrics, and scenario-specific invariants.
+- validate_matrix: Ensures every expected scenario was run exactly once without
+  unexpected scenarios.
+- validation_exit_code: Deterministic 0 or 2 exit code translation.
+- _serialize_invocation: Flattens agent telemetry into JSON-serializable payloads.
+- execute_scenario: Prepares workspace, materializes config, and executes scenario.
+- _run_matrix, _write_result, main: Command-line entry points and reporting.
+"""
 
 from __future__ import annotations
 
@@ -6,16 +19,10 @@ import argparse
 import hashlib
 import json
 import os
-import socket
-import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 from software_agent_team.artifacts import AgentRole, ArtifactKind
 from software_agent_team.execution import (
@@ -26,74 +33,34 @@ from software_agent_team.execution import (
     ProviderLivenessPolicy,
     ResponseFinalizationPolicy,
 )
+from software_agent_team.loopback_validation.container_cleanup import (
+    remove_sandbox_sessions,
+    sandbox_container_ids,
+)
+from software_agent_team.loopback_validation.server import running_server
+from software_agent_team.loopback_validation.types import (
+    _EXPECTED_RESPONSE,
+    _EXPECTED_TERMINAL,
+    _TERMINAL_PHASES,
+    MODEL,
+    OPTIONAL_SCENARIOS,
+    SCENARIOS,
+    ScenarioValidation,
+    _mapping,
+    _sequence,
+)
 from software_agent_team.openclaw_runtime import isolated_openclaw_environment
 from software_agent_team.quality_gates import load_quality_gate_configuration
 from software_agent_team.runtime_configuration import materialize_run_configuration
-from software_agent_team.sandbox_lifecycle import (
-    cleanup_sat_sandbox_sessions,
-    inspect_sat_sandbox_resources,
-)
 from software_agent_team.submissions import (
     AgentSubmissionContract,
     AgentSubmissionPurpose,
 )
 from software_agent_team.teams import AgentCapability, load_team_manifest
 
-MODEL = "deepseek/deepseek-flash"
-SCENARIOS = ("stream", "recovery", "disconnect", "hang")
-OPTIONAL_SCENARIOS = (
-    "tool-rejection",
-    "continuation",
-    "correction",
-    "submission-contract",
-    "tool-warning-submission",
-)
-_EXPECTED_TERMINAL = {
-    "stream": ("completed", "completed"),
-    "recovery": ("completed", "completed"),
-    "disconnect": ("process_failed", "process_failure"),
-    "hang": ("provider_stalled", "provider_stall"),
-    "tool-rejection": ("completed", "completed"),
-    "continuation": ("completed", "completed"),
-    "correction": ("completed", "completed"),
-    "submission-contract": ("completed", "completed"),
-    "tool-warning-submission": ("completed", "completed"),
-}
-_TERMINAL_PHASES = ("stopping", "collecting_evidence", "stopped")
-_EXPECTED_RESPONSE = '{"status":"ok"}'
-
-
-@dataclass(frozen=True)
-class ScenarioValidation:
-    """Machine-readable verdict for one controlled transport scenario."""
-
-    scenario: str
-    passed: bool
-    mismatches: tuple[str, ...]
-
-    def as_dict(self) -> dict[str, object]:
-        """Render the verdict without exposing transport content."""
-
-        return {
-            "scenario": self.scenario,
-            "passed": self.passed,
-            "mismatches": list(self.mismatches),
-        }
-
-
-def _mapping(value: object) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _sequence(value: object) -> Sequence[Any]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return value
-    return ()
-
 
 def validate_scenario_outcome(outcome: Mapping[str, object]) -> ScenarioValidation:
     """Compare one result with the complete oracle for its declared scenario."""
-
     scenario_value = outcome.get("scenario")
     scenario = scenario_value if isinstance(scenario_value, str) else "<missing>"
     mismatches: list[str] = []
@@ -333,7 +300,6 @@ def validate_matrix(
     expected_scenarios: Sequence[str] = SCENARIOS,
 ) -> dict[str, object]:
     """Validate presence, uniqueness, and the typed oracle for every scenario."""
-
     expected = tuple(expected_scenarios)
     observed_names = [outcome.get("scenario") for outcome in outcomes]
     matrix_mismatches: list[str] = []
@@ -363,313 +329,7 @@ def validate_matrix(
 
 def validation_exit_code(validation: Mapping[str, object]) -> int:
     """Return a shell gate status from a matrix verdict."""
-
     return 0 if validation.get("passed") is True else 2
-
-
-def sandbox_container_ids(docker_binary: str, state_root: Path) -> list[str]:
-    """Observe the disposable scenario through the shared mount-ownership owner."""
-
-    observation = inspect_sat_sandbox_resources(
-        sandbox_binary=docker_binary, state_root=state_root
-    )
-    return sorted(item.container_id for item in observation.containers)
-
-
-def remove_sandbox_sessions(
-    docker_binary: str,
-    session_keys: Sequence[str],
-    *,
-    state_root: Path,
-) -> dict[str, object]:
-    """Recover actual cache labels only inside this scenario's private state."""
-
-    before = inspect_sat_sandbox_resources(
-        sandbox_binary=docker_binary, state_root=state_root
-    )
-    actual_keys = sorted({item.session_key for item in before.containers})
-    removed = (
-        cleanup_sat_sandbox_sessions(
-            sandbox_binary=docker_binary,
-            session_keys=actual_keys,
-            state_root=state_root,
-        ).removed
-        if actual_keys
-        else ()
-    )
-    after = sandbox_container_ids(docker_binary, state_root)
-    return {
-        "session_keys": list(dict.fromkeys(session_keys)),
-        "observed_session_keys": actual_keys,
-        "container_ids_before_cleanup": sorted(
-            item.container_id for item in before.containers
-        ),
-        "removed_container_ids": sorted(item.container_id for item in removed),
-        "container_ids_after_cleanup": after,
-        "completed": not after,
-    }
-
-
-class ScenarioServer(ThreadingHTTPServer):
-    """Loopback endpoint plus an observation-driven recovery handshake."""
-
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, address: tuple[str, int], scenario: str) -> None:
-        super().__init__(address, ScenarioHandler)
-        self.scenario = scenario
-        self.requests_seen = 0
-        self.started = time.monotonic()
-        self.events: list[dict[str, object]] = []
-        self._event_lock = threading.Lock()
-        self._recovery_condition = threading.Condition()
-        self._controller_stall_signals = 0
-        self._stopping = False
-
-    def record(self, kind: str, **details: object) -> None:
-        """Record a content-free endpoint event."""
-
-        event = {
-            "elapsed_ms": round((time.monotonic() - self.started) * 1000),
-            "kind": kind,
-            **details,
-        }
-        with self._event_lock:
-            self.events.append(event)
-
-    def signal_controller_stall(self) -> None:
-        """Release one recovery fragment after a real Controller observation."""
-
-        with self._recovery_condition:
-            self._controller_stall_signals += 1
-            sequence = self._controller_stall_signals
-            self._recovery_condition.notify_all()
-        self.record("controller_stall_signal", sequence=sequence)
-
-    def wait_for_controller_stall(self, sequence: int, timeout: float) -> bool:
-        """Wait until the Controller has observed the requested suspicion."""
-
-        with self._recovery_condition:
-            return (
-                self._recovery_condition.wait_for(
-                    lambda: (
-                        self._controller_stall_signals >= sequence or self._stopping
-                    ),
-                    timeout=timeout,
-                )
-                and self._controller_stall_signals >= sequence
-            )
-
-    def wait_until_stopping(self, timeout: float) -> None:
-        """Keep a hang response open until validation teardown begins."""
-
-        with self._recovery_condition:
-            self._recovery_condition.wait_for(lambda: self._stopping, timeout=timeout)
-
-    def begin_teardown(self) -> None:
-        """Release endpoint workers without extending process teardown."""
-
-        with self._recovery_condition:
-            self._stopping = True
-            self._recovery_condition.notify_all()
-
-
-class ScenarioHandler(BaseHTTPRequestHandler):
-    """Serve deterministic streaming, recovery, disconnect, and hang responses."""
-
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-    def do_POST(self) -> None:
-        server = self.server
-        assert isinstance(server, ScenarioServer)
-        server.requests_seen += 1
-        server.record("request", path=self.path)
-        length = int(self.headers.get("content-length", "0"))
-        request = json.loads(self.rfile.read(length))
-        if request.get("model") != MODEL.split("/", 1)[1]:
-            server.record("unexpected_model")
-            self.send_error(400)
-            return
-        if request.get("stream") is not True:
-            server.record("non_stream_request")
-            self.send_error(400)
-            return
-
-        if (
-            server.scenario in {"submission-contract", "tool-warning-submission"}
-            and server.requests_seen == 1
-        ):
-            names = [
-                _mapping(item.get("function")).get("name")
-                for item in _sequence(request.get("tools"))
-                if isinstance(item, dict)
-            ]
-            choice = _mapping(_mapping(request.get("tool_choice")).get("function"))
-            valid = (
-                "sat_submit_artifact" in names
-                and choice.get("name") == "sat_submit_artifact"
-            )
-            server.record("submission_contract", valid=valid, tool_names=names)
-            if not valid:
-                self.send_error(400, "bound submission tool was not declared")
-                return
-
-        if server.scenario == "disconnect":
-            server.record("disconnect")
-            self.connection.shutdown(socket.SHUT_RDWR)
-            self.connection.close()
-            return
-
-        self.send_response(200)
-        self.send_header("content-type", "text/event-stream")
-        self.send_header("cache-control", "no-cache")
-        self.send_header("connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        self.wfile.flush()
-        server.record("headers_flushed")
-
-        if server.scenario == "tool-rejection" and server.requests_seen <= 2:
-            name, arguments = (
-                ("sat_nonexistent_fixture_tool", {})
-                if server.requests_seen == 1
-                # The static read-only profile mounts the source at /agent;
-                # /workspace is the separate sandbox working directory.
-                else ("read", {"path": "/agent/fixture.txt"})
-            )
-            self._send_tool_call(name, arguments)
-            return
-
-        if server.scenario == "tool-warning-submission":
-            if server.requests_seen == 1:
-                self._send_tool_call("ls", {"path": "/agent/absent-warning-fixture"})
-            else:
-                self._send_tool_call(
-                    "sat_submit_artifact", {"artifact": {"status": "ok"}}
-                )
-            return
-
-        if server.scenario == "submission-contract" and server.requests_seen == 1:
-            self._send_tool_call("sat_submit_artifact", {"artifact": {"status": "ok"}})
-            return
-
-        if server.scenario == "hang":
-            self._send_chunk('{"status":')
-            server.record("hang_started")
-            server.wait_until_stopping(timeout=30)
-            return
-
-        fragments = ('{"status"', ':"ok"', "}")
-        if server.scenario == "recovery":
-            self._send_chunk(fragments[0])
-            server.record("text_delta_flushed", sequence=1)
-            for sequence, fragment in enumerate(fragments[1:], start=1):
-                if not server.wait_for_controller_stall(sequence, timeout=30):
-                    server.record("recovery_signal_timeout", sequence=sequence)
-                    return
-                self._send_chunk(fragment)
-                server.record("text_delta_flushed", sequence=sequence + 1)
-        else:
-            for sequence, fragment in enumerate(fragments, start=1):
-                self._send_chunk(fragment)
-                server.record("text_delta_flushed", sequence=sequence)
-                time.sleep(0.45)
-        self._send_terminal()
-        server.record("terminal_flushed")
-
-    def _send_chunk(self, content: str) -> None:
-        payload = {
-            "id": "loopback-validation",
-            "object": "chat.completion.chunk",
-            "created": 0,
-            "model": MODEL.split("/", 1)[1],
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": content},
-                    "finish_reason": None,
-                }
-            ],
-        }
-        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
-        self.wfile.flush()
-
-    def _send_tool_call(self, name: str, arguments: dict[str, object]) -> None:
-        """Exercise real runtime rejection/pairing with fixed local-only inputs."""
-
-        payload = {
-            "id": "loopback-tool-validation",
-            "object": "chat.completion.chunk",
-            "created": 0,
-            "model": MODEL.split("/", 1)[1],
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": f"fixture-{name}",
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": json.dumps(arguments),
-                                },
-                            }
-                        ],
-                    },
-                    "finish_reason": None,
-                }
-            ],
-        }
-        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
-        payload["choices"] = [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
-        payload["usage"] = {
-            "prompt_tokens": 12,
-            "completion_tokens": 5,
-            "total_tokens": 17,
-        }
-        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-    def _send_terminal(self) -> None:
-        terminal = {
-            "id": "loopback-validation",
-            "object": "chat.completion.chunk",
-            "created": 0,
-            "model": MODEL.split("/", 1)[1],
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 12,
-                "completion_tokens": 5,
-                "total_tokens": 17,
-            },
-        }
-        self.wfile.write(f"data: {json.dumps(terminal)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-
-@contextmanager
-def running_server(scenario: str) -> Iterator[ScenarioServer]:
-    """Run and deterministically stop one loopback scenario endpoint."""
-
-    server = ScenarioServer(("127.0.0.1", 0), scenario)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        yield server
-    finally:
-        server.begin_teardown()
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def _serialize_invocation(
@@ -677,7 +337,6 @@ def _serialize_invocation(
     activities: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     """Serialize one invocation without losing initialization evidence."""
-
     lifecycle = result.telemetry.invocation_lifecycle
     provider_liveness = result.telemetry.provider_liveness
     response_finalization = (
@@ -756,7 +415,6 @@ def execute_scenario(
     prompt_padding_chars: int = 0,
 ) -> dict[str, object]:
     """Execute one real OpenClaw transport scenario through the SAT adapter."""
-
     scenario_root = root / scenario
     state = scenario_root / "state"
     workspace = scenario_root / "workspace"
@@ -928,6 +586,7 @@ def execute_scenario(
 
 
 def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
+    """Execute all requested scenarios and validate against the oracle matrix."""
     repository = args.repository.resolve(strict=True)
     openclaw = args.openclaw.resolve(strict=True)
     configuration = load_quality_gate_configuration(
@@ -978,6 +637,7 @@ def _run_matrix(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _write_result(payload: Mapping[str, object], output: Path | None) -> None:
+    """Write or print the formatted execution result and matrix verdict."""
     rendered = json.dumps(payload, indent=2) + "\n"
     if output is None:
         print(rendered, end="")
@@ -998,7 +658,6 @@ def _write_result(payload: Mapping[str, object], output: Path | None) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the controlled matrix and fail closed on any oracle mismatch."""
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--openclaw", type=Path, required=True)
