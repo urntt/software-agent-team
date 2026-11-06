@@ -10,6 +10,8 @@ from software_agent_team.response_corrections import (
 )
 
 from .candidate_binding import (
+    _MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT,
+    _MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS,
     _candidate_similarity,
     _context_failure_diagnostic,
     _review_assessment_status_for_path,
@@ -20,6 +22,13 @@ from .candidate_binding import (
     bind_review_evidence_correction_candidates,
 )
 from .evidence_matching import (
+    _LEGACY_EXIT_MARKER,
+    _PROBE_EXECUTABLES,
+    _PROBE_RESULT_PREFIX,
+    _PROBE_STDERR_BEGIN,
+    _PROBE_STDERR_END,
+    _PROBE_STDOUT_BEGIN,
+    _PROBE_STDOUT_END,
     _bind_unambiguous_blocking_finding_scope,
     _build_grounded_review_response,
     _ground_review_tool_evidence,
@@ -86,6 +95,15 @@ __all__ = [
     "RESPONSE_BODY_MODELS",
     "_COMMON_CONTROLLER_FIELDS",
     "_CONTROLLER_FIELDS",
+    "_LEGACY_EXIT_MARKER",
+    "_MAX_REVIEW_EVIDENCE_CANDIDATES_PER_SLOT",
+    "_MAX_REVIEW_EVIDENCE_FRAGMENT_CHARACTERS",
+    "_PROBE_EXECUTABLES",
+    "_PROBE_RESULT_PREFIX",
+    "_PROBE_STDERR_BEGIN",
+    "_PROBE_STDERR_END",
+    "_PROBE_STDOUT_BEGIN",
+    "_PROBE_STDOUT_END",
     "_PROTECTED_CONTROLLER_FIELD_NAMES",
     "AgentArtifactResponseError",
     "AgentResponseBody",

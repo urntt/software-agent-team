@@ -13,6 +13,7 @@ from .journal import (
     _system_clock,
 )
 from .models import (
+    _INVOCATION_EVENT_KINDS,
     EventAnchorReader,
     EventAnchorWriter,
     EventClock,
@@ -62,6 +63,7 @@ __all__ = [
     "RUN_EVENT_SCHEMA_VERSION",
     "_ATTEMPT_EVENT_KINDS",
     "_EVENT_METADATA",
+    "_INVOCATION_EVENT_KINDS",
     "_RUN_EVENT_SCHEMA_FOUR_KINDS",
     "_VISIBILITY_RANK",
     "AgentRunState",

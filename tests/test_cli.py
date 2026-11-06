@@ -4336,7 +4336,23 @@ def test_cli_run_rejects_changes_to_frozen_benchmark(
     assert "permits only run_id" in capsys.readouterr().out
 
 
-def test_cli_facade_monkeypatch_compatibility(
+def test_cli_monkeypatch_prompts_delegation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_yes_no(label: str, *, default: bool) -> bool:
+        calls.append(label)
+        return False
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
+    from software_agent_team.cli.prompts import _prompt_optional_run_deadline
+
+    assert _prompt_optional_run_deadline() is None
+    assert any("Set a deadline for this task?" in c for c in calls)
+
+
+def test_cli_monkeypatch_product_request_delegation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4346,29 +4362,11 @@ def test_cli_facade_monkeypatch_compatibility(
         calls.append(f"yes_no:{label}")
         return False
 
-    def fake_value(label: str, current: object | None = None) -> str:
-        calls.append(f"value:{label}")
-        return "mocked-result"
-
-    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
-    monkeypatch.setattr(cli, "_prompt_value", fake_value)
-
-    # 1. Test prompts module dynamic routing through cli
-    from software_agent_team.cli.prompts import _prompt_optional_run_deadline
-
-    assert _prompt_optional_run_deadline() is None
-    assert any("Set a deadline for this task?" in c for c in calls)
-
-    # 2. Test cli._prompt_value direct delegation
-    val = cli._prompt_value("Enter key", "default")
-    assert val == "mocked-result"
-    assert any("Enter key" in c for c in calls)
-
-    # 3. Test cli.product module dynamic routing via monkeypatched facade
     def fake_product_text(prompt: str, **kwargs: object) -> str:
         calls.append(f"product_text:{prompt}")
         return "mocked text"
 
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
     monkeypatch.setattr(cli, "_prompt_product_text", fake_product_text)
     from software_agent_team.user_configuration import UserConfiguration
 
@@ -4380,17 +4378,28 @@ def test_cli_facade_monkeypatch_compatibility(
         execution_profile=("Profile 1",),
         base_constraints=(),
     )
-    # fake_yes_no returns False, so user declined to build with profile -> returns None
     assert res is None
     assert any("Build your request with this execution profile?" in c for c in calls)
     assert any("product_text:> " in c for c in calls)
 
-    # 4. Test cli.commands.validation module dynamic routing via monkeypatched facade
+
+def test_cli_monkeypatch_validation_cleanup_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     import argparse
     from unittest.mock import MagicMock
 
     from software_agent_team.cli.commands.validation import _cleanup_owned_resources
 
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    calls: list[str] = []
+
+    def fake_yes_no(label: str, *, default: bool) -> bool:
+        calls.append(label)
+        return False
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
     dummy_args = argparse.Namespace(yes=False, orphans=True)
     mock_store = MagicMock()
     mock_obs = MagicMock()
@@ -4405,14 +4414,23 @@ def test_cli_facade_monkeypatch_compatibility(
     )
     rc = _cleanup_owned_resources(dummy_args)
     assert rc == 0
-    assert any(
-        "Stop the proven orphaned process groups and their SAT sandboxes?" in c
-        for c in calls
-    )
+    assert any("Stop the proven orphaned process groups" in c for c in calls)
 
-    # 5. Test cli.commands.version module dynamic routing via monkeypatched facade
+
+def test_cli_monkeypatch_version_channel_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
     from software_agent_team.cli.commands.version import _apply_managed_change
 
+    calls: list[str] = []
+
+    def fake_yes_no(label: str, *, default: bool) -> bool:
+        calls.append(label)
+        return False
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
     mock_plan = MagicMock()
     mock_plan.requires_activation = True
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
@@ -4425,7 +4443,10 @@ def test_cli_facade_monkeypatch_compatibility(
     assert rc_ver == 0
     assert any("Stage, verify, and activate this target?" in c for c in calls)
 
-    # 6. Test cli.commands.configure module dynamic routing via monkeypatched facade
+
+def test_cli_monkeypatch_configure_metadata_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from decimal import Decimal
 
     from software_agent_team.cli.commands.configure import _complete_model_metadata
@@ -4433,12 +4454,26 @@ def test_cli_facade_monkeypatch_compatibility(
     from software_agent_team.model_metadata import ModelMetadataSource
     from software_agent_team.model_routing import ModelProfile
     from software_agent_team.runtime_configuration import OpenClawModelInspection
+    from software_agent_team.user_configuration import UserConfiguration
+
+    calls: list[str] = []
+
+    def fake_yes_no(label: str, *, default: bool) -> bool:
+        calls.append(f"yes_no:{label}")
+        return False
 
     def fake_nonnegative_decimal(label: str) -> Decimal:
         calls.append(f"decimal:{label}")
         return Decimal("0.0")
 
+    def fake_context_window(model: str) -> int:
+        calls.append(f"context:{model}")
+        return 16384
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", fake_yes_no)
     monkeypatch.setattr(cli, "_prompt_nonnegative_decimal", fake_nonnegative_decimal)
+    monkeypatch.setattr(cli, "_prompt_context_window", fake_context_window)
+
     test_profile = ModelProfile(
         id="default",
         model="provider/test-model",
@@ -4455,25 +4490,16 @@ def test_cli_facade_monkeypatch_compatibility(
             observed_at=datetime.now(UTC),
         ),
     )
-    test_config = UserConfiguration(
-        model_profiles=(test_profile,),
-    )
+    test_config = UserConfiguration(model_profiles=(test_profile,))
     test_inspection = OpenClawModelInspection(
         model="provider/test-model",
         available=True,
     )
-    # fake_yes_no will be called for "Change these saved prices?"
-    # and "Change these cache prices?"
     _complete_model_metadata(test_config, (test_inspection,), offer_price_change=True)
     assert any("Change these saved prices?" in c for c in calls)
     assert any("Change these cache prices?" in c for c in calls)
 
-    # 7. Test cli._prompt_context_window dynamic delegation
-    def fake_context_window(model: str) -> int:
-        calls.append(f"context:{model}")
-        return 16384
-
-    monkeypatch.setattr(cli, "_prompt_context_window", fake_context_window)
+    # Test context window prompt on model missing context
     test_profile_no_ctx = ModelProfile(
         id="default",
         model="provider/no-context-model",
@@ -4499,3 +4525,47 @@ def test_cli_facade_monkeypatch_compatibility(
         test_config2, (test_inspection2,), offer_price_change=False
     )
     assert any("context:provider/no-context-model" in c for c in calls)
+
+
+def test_cli_monkeypatch_configure_flow_invokes_prompt_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from software_agent_team.user_configuration import (
+        load_user_configuration,
+        save_user_configuration,
+    )
+
+    configuration_path = tmp_path / "config.json"
+    configured = ready_user_configuration(model="provider/saved")
+    monkeypatch.setenv("SAT_CONFIG_PATH", str(configuration_path))
+    monkeypatch.setenv("SAT_STATE_ROOT", str(tmp_path / "state"))
+    save_user_configuration(configured, configuration_path)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+
+    prompt_value_calls: list[str] = []
+
+    def fake_prompt_value(label: str, default: object | None = None) -> str:
+        prompt_value_calls.append(label)
+        return "provider/monkeypatched-model"
+
+    monkeypatch.setattr(cli, "_prompt_yes_no", lambda *a, **kw: False)
+    monkeypatch.setattr(cli, "_prompt_value", fake_prompt_value)
+    monkeypatch.setattr(
+        cli, "_prompt_nonnegative_decimal", lambda label: Decimal("1.0")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_inspect_selected_model",
+        ready_model_inspection,
+    )
+
+    assert main(["configure"]) == 0
+
+    assert any("OpenClaw model reference" in label for label in prompt_value_calls)
+    loaded = load_user_configuration(configuration_path)
+    assert loaded is not None
+    assert loaded.model == "provider/monkeypatched-model"
