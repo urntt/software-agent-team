@@ -11,6 +11,7 @@ This package provides:
 
 from __future__ import annotations
 
+from software_agent_team.artifacts import ProviderLivenessEvidence
 from software_agent_team.execution.constants import (
     COMPACTION_LINEAGE_ERROR,
     COMPACTION_LINEAGE_RECHECK_SECONDS,
@@ -27,7 +28,6 @@ from software_agent_team.execution.constants import (
     MAX_INITIALIZATION_PROCESS_SAMPLE_SECONDS,
     PROVIDER_ACTIVITY_REPORT_SECONDS,
 )
-from software_agent_team.artifacts import ProviderLivenessEvidence
 from software_agent_team.execution.liveness import (
     InitializationLivenessPolicy,
     MonotonicClock,
