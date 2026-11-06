@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -12,6 +13,11 @@ MAX_PLANNING_EVIDENCE_CHARACTERS = 1_000_000
 MAX_RESPONSE_NORMALIZATIONS = 100
 MAX_RESPONSE_NORMALIZATION_CHARACTERS = 200
 MAX_PLANNING_DECISION_SUMMARY_CHARACTERS = 500
+
+
+def _digest_text(value: str) -> str:
+    """Calculate canonical SHA-256 digest of utf-8 text."""
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _utc(value: datetime) -> datetime:
@@ -68,3 +74,8 @@ def _safe_path(value: str) -> str:
     ):
         raise ValueError("paths must be canonical safe relative POSIX paths")
     return cleaned
+
+
+def _normalized_evidence_text(value: str) -> str:
+    """Normalize user-visible text only enough for attributable quote matching."""
+    return " ".join(value.casefold().split())
